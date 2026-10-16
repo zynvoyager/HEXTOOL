@@ -1,14 +1,19 @@
-name: Build Android APK
+
+name: Build HEXTOOL APK
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch: # Harus sejajar dengan 'push', bukan di dalam 'push'
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: HEXTOOL
 
     steps:
       - name: Checkout Repository
@@ -17,5 +22,21 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: HEXTOOL-debug-apk
+          path: HEXTOOL/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
