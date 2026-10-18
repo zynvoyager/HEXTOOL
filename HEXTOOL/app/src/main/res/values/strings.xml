@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">HEXTOOL membaca teks yang tampil di layar hanya untuk menemukan kode HEX dan menampilkan terjemahannya di atas layar. Tidak ada data yang dikirim keluar dari perangkat.</string>
+</resources>

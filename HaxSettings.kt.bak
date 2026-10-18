@@ -1,0 +1,43 @@
+package com.example.hextool
+
+import android.content.Context
+import android.content.SharedPreferences
+
+object HexSettings {
+
+    const val PREF_NAME = "HexPanelPrefs"
+    const val KEY_PANEL_SIZE = "panel_size_index"
+    const val KEY_BUBBLE_DP = "bubble_size_dp"
+
+    const val BUBBLE_MIN_DP = 40
+    const val BUBBLE_MAX_DP = 120
+    const val BUBBLE_DEFAULT_DP = 68
+
+    const val PANEL_COUNT = 3          // 0 = S, 1 = M, 2 = L
+    const val PANEL_DEFAULT_INDEX = 0
+
+    fun prefs(context: Context): SharedPreferences =
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+
+    fun getBubbleDp(context: Context): Int =
+        prefs(context)
+            .getInt(KEY_BUBBLE_DP, BUBBLE_DEFAULT_DP)
+            .coerceIn(BUBBLE_MIN_DP, BUBBLE_MAX_DP)
+
+    fun setBubbleDp(context: Context, value: Int) {
+        prefs(context).edit()
+            .putInt(KEY_BUBBLE_DP, value.coerceIn(BUBBLE_MIN_DP, BUBBLE_MAX_DP))
+            .apply()
+    }
+
+    fun getPanelIndex(context: Context): Int =
+        prefs(context)
+            .getInt(KEY_PANEL_SIZE, PANEL_DEFAULT_INDEX)
+            .coerceIn(0, PANEL_COUNT - 1)
+
+    fun setPanelIndex(context: Context, value: Int) {
+        prefs(context).edit()
+            .putInt(KEY_PANEL_SIZE, value.coerceIn(0, PANEL_COUNT - 1))
+            .apply()
+    }
+}

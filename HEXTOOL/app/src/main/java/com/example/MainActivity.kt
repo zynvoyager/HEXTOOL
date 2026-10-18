@@ -1,141 +1,1531 @@
 package com.example.hextool
 
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.service.notification.NotificationListenerService
 import android.provider.Settings
-import android.widget.*
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.Gravity
+import android.view.View
+import android.widget.Button
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.SeekBar
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
+
+    private lateinit var targetContainer: LinearLayout
+    private lateinit var logContainer: LinearLayout
+    private lateinit var logFilterRow: LinearLayout
+    private var currentLogFilter = "Semua"
+    private lateinit var searchInput: EditText
+    private var allTargets: List<TargetModel> = emptyList()
+
+    // Status cards (Home)
+    private lateinit var cardSistem: LinearLayout
+    private lateinit var cardTarget: LinearLayout
+    private lateinit var cardLog: LinearLayout
+    private lateinit var cardFloating: LinearLayout
+    private lateinit var cardIzin: LinearLayout
+
+    private val navButtons = ArrayList<TextView>()
+    private val navIcons = ArrayList<TextView>()
+    private val navItems = ArrayList<LinearLayout>()  // NAVCLICK_FIX_V1: item yang sungguh punya OnClickListener
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // Root Layout (Hitam Solid)
-        val mainLayout = LinearLayout(this).apply {
+
+        window.statusBarColor = HexTheme.bg
+        window.navigationBarColor = HexTheme.bg
+
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(HexTheme.bg)
+        }
+
+        // Background topo (tipis)
+        root.addView(
+            ImageView(this).apply {
+                setImageResource(R.drawable.bg_topo)
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                alpha = 0.18f
+            },
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        val navBarHeight = dp(64)
+        val contentArea = FrameLayout(this)
+
+        // ---- TAB CONTENTS ----
+        val tabHome = buildHomeTab()
+        val tabTargets = buildTargetsTab()
+        val tabLogs = buildLogsTab()
+        val tabSettings = buildSettingsTab()
+        val tabs = listOf(tabHome, tabTargets, tabLogs, tabSettings)
+
+        tabs.forEach { tab ->
+            contentArea.addView(
+                tab,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
+            tab.visibility = View.GONE
+        }
+        tabHome.visibility = View.VISIBLE
+
+        root.addView(
+            contentArea,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ).apply { bottomMargin = navBarHeight }
+        )
+
+        root.addView(
+            buildBottomNav { index -> switchTab(tabs, index) },
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                navBarHeight,
+                Gravity.BOTTOM
+            )
+        )
+
+        setContentView(root)
+
+        refreshTargets()
+        refreshLogs()
+        refreshStatusCards()
+        requestNotificationPermission()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshTargets()
+        refreshLogs()
+        refreshStatusCards()
+    }
+
+    // =========================================================
+    //  HOME / DASHBOARD
+    // =========================================================
+
+    private fun buildHomeTab(): View {
+        val scroll = ScrollView(this)
+        val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(android.graphics.Color.BLACK)
-            setPadding(30, 40, 30, 40)
+            setPadding(dp(20), dp(28), dp(20), dp(24))
         }
 
-        val scroll = ScrollView(this).apply {
-            addView(mainLayout)
+        // Header
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(20))
+        }
+        header.addView(
+            ImageView(this).apply {
+                setImageResource(R.drawable.hex_dragon)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            },
+            LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(12) }
+        )
+        val titleCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        titleCol.addView(TextView(this).apply {
+            text = "HEXTOOL"
+            setTextColor(HexTheme.textPrimary)
+            textSize = 22f
+            setTypeface(null, Typeface.BOLD)
+            letterSpacing = 0.08f
+        })
+        titleCol.addView(TextView(this).apply {
+            text = "Simple Tools. Greater Control."
+            setTextColor(HexTheme.textSecondary)
+            textSize = 12f
+        })
+        header.addView(titleCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        col.addView(header)
+
+        // Status grid (2x2 + 1)
+        val statusTitle = sectionTitle("Status Sistem")
+        col.addView(statusTitle)
+
+        val row1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        cardSistem = statusCard("●  Sistem", "Memuat...", HexTheme.accent)
+        cardTarget = statusCard("◎  Target", "0 Aktif", HexTheme.accent)
+        row1.addView(cardSistem, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) })
+        row1.addView(cardTarget, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8) })
+        col.addView(row1)
+
+        val row2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        cardLog = statusCard("☰  Log", "0 Baru", HexTheme.accent)
+        cardFloating = statusCard("◉  Floating", "Nonaktif", HexTheme.textMuted)
+        row2.addView(cardLog, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) })
+        row2.addView(cardFloating, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8) })
+        col.addView(row2)
+
+        cardIzin = statusCard("🛡  Izin Sistem", "Periksa status", HexTheme.warning)
+        cardIzin.setPadding(dp(16), dp(14), dp(16), dp(14))
+        col.addView(cardIzin, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(16) })
+
+        // Fitur utama
+        col.addView(sectionTitle("Fitur Utama").apply {
+            setPadding(0, dp(28), 0, dp(10))
+        })
+
+        col.addView(featureRow("◎", "Multi-Target Manager", "Kelola kontak & grup") {
+            // switch to targets tab via bottom nav simulation
+            navItems.getOrNull(1)?.performClick()
+        })
+        col.addView(featureRow("☰", "Log History", "Lihat riwayat pesan") {
+            navItems.getOrNull(2)?.performClick()
+        })
+        col.addView(featureRow("◉", "Floating Bubble", "Aktifkan bubble mengambang") {
+            activateFloatingBubble()
+        })
+        col.addView(featureRow("🔗", "Link / QR Checker", "Cek tautan secara lokal (tanpa server)") {
+            showLinkCheckerDialog()
+        })
+        col.addView(featureRow("🔕", "Notifikasi Silent", "Senyapkan app / kata kunci tertentu") {
+            navItems.getOrNull(3)?.performClick()
+        })
+
+        // Quick actions
+        col.addView(sectionTitle("Aksi Cepat").apply {
+            setPadding(0, dp(28), 0, dp(10))
+        })
+
+        col.addView(primaryButton("Cek Link dari Clipboard") {
+            showLinkCheckerDialog(fromClipboard = true)
+        })
+        col.addView(secondaryButton("Cek Status Izin") {
+            openPermissionSettings()
+        }.apply {
+            (layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
+        })
+        col.addView(secondaryButton("Aktifkan Floating Bubble") {
+            activateFloatingBubble()
+        }.apply {
+            (layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
+        })
+
+        // Footer
+        col.addView(TextView(this).apply {
+            text = "© Zyn / Sik dev"
+            setTextColor(HexTheme.textMuted)
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(32), 0, dp(8))
+        })
+
+        scroll.addView(col)
+        return scroll
+    }
+
+    private fun statusCard(title: String, subtitle: String, accent: Int): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedGradient(HexTheme.panelBgAlt, HexTheme.panelBg, 16f, HexTheme.accentDim, 1)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                setTextColor(accent)
+                textSize = 13f
+                setTypeface(null, Typeface.BOLD)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = subtitle
+                setTextColor(HexTheme.textSecondary)
+                textSize = 12f
+                setPadding(0, dp(4), 0, 0)
+                tag = "subtitle"
+            })
+        }
+    }
+
+    private fun featureRow(icon: String, title: String, desc: String, onClick: () -> Unit): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(HexTheme.panelBg, 14f, HexTheme.accentDim, 1)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setOnClickListener { onClick() }
+            isClickable = true; isFocusable = true; foreground = run { val tv = android.util.TypedValue(); context.theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true); androidx.core.content.ContextCompat.getDrawable(context, tv.resourceId) }
+
+            addView(TextView(this@MainActivity).apply {
+                text = icon
+                setTextColor(HexTheme.accent)
+                textSize = 18f
+                gravity = Gravity.CENTER
+            }.also { it.background = rounded(HexTheme.accentGlow, 18f) }, LinearLayout.LayoutParams(dp(36), dp(36))) // HOME_POLISH_V1
+
+            val textCol = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            textCol.addView(TextView(this@MainActivity).apply {
+                text = title
+                setTextColor(HexTheme.textPrimary)
+                textSize = 14f
+                setTypeface(null, Typeface.BOLD)
+            })
+            textCol.addView(TextView(this@MainActivity).apply {
+                text = desc
+                setTextColor(HexTheme.textSecondary)
+                textSize = 12f
+            })
+            addView(textCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+            addView(TextView(this@MainActivity).apply {
+                text = "›"
+                setTextColor(HexTheme.textMuted)
+                textSize = 20f
+            })
+        }.also {
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.topMargin = dp(10)
+            it.layoutParams = lp
+        }
+    }
+
+    private fun refreshStatusCards() {
+        ensureListenerBound()
+        updateNotifStatusText()
+        val targets = HexLogDatabase.getTargets(this)
+        val logs = HexLogDatabase.getLogs(this)
+        val overlayOk = Settings.canDrawOverlays(this)
+        val notifOn = HexSettings.isNotifEnabled(this) && isListenerReady()
+
+        setCardSubtitle(cardTarget, "${targets.size} Aktif")
+        setCardSubtitle(cardLog, "${logs.size} Entri")
+
+        if (overlayOk) {
+            setCardSubtitle(cardFloating, "Siap")
+            setCardAccent(cardFloating, HexTheme.success)
+        } else {
+            setCardSubtitle(cardFloating, "Butuh izin")
+            setCardAccent(cardFloating, HexTheme.warning)
         }
 
-        // Header Title (Terminal Green)
-        val title = TextView(this).apply {
-            text = "HEX TOOL"
-            setTextColor(android.graphics.Color.parseColor("#00FF00"))
-            textSize = 20f
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            gravity = android.view.Gravity.CENTER
-            setPadding(0, 20, 0, 20)
+        val izinText = buildString {
+            append(if (overlayOk) "Overlay ✓  " else "Overlay ✗  ")
+            append(if (notifOn) "Notif ✓" else "Notif ✗")
         }
-        mainLayout.addView(title)
+        setCardSubtitle(cardIzin, izinText)
+        setCardAccent(cardIzin, if (overlayOk) HexTheme.success else HexTheme.warning)
 
-        // Tombol Perizinan & Floating
-        val btnPerms = Button(this).apply {
-            text = "[ IZIN SISTEM & NOTIFIKASI ]"
-            setTextColor(android.graphics.Color.parseColor("#00FF00"))
-            setBackgroundColor(android.graphics.Color.parseColor("#111111"))
+        setCardSubtitle(cardSistem, "Berjalan normal")
+        setCardAccent(cardSistem, HexTheme.success)
+    }
+
+    // ---------- TAHAP_NOTIF_FIX_V1: status & penyambungan ulang listener ----------
+
+    private var notifStatusView: TextView? = null
+    private var lastRebindMs = 0L
+
+    private fun isListenerEnabled(): Boolean =
+        NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
+
+    private fun isListenerReady(): Boolean =
+        isListenerEnabled() && WhatsAppHexService.connected
+
+    // Akses sudah dicentang tapi service belum tersambung (mis. habis install ulang).
+    private fun ensureListenerBound() {
+        if (!isListenerEnabled() || WhatsAppHexService.connected) return
+        val now = System.currentTimeMillis()
+        if (now - lastRebindMs < 10000L) return
+        lastRebindMs = now
+        try {
+            NotificationListenerService.requestRebind(
+                ComponentName(this, WhatsAppHexService::class.java)
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun updateNotifStatusText() {
+        val v = notifStatusView ?: return
+        val state = when {
+            !isListenerEnabled() -> "akses notifikasi MATI (aktifkan HEXTOOL di pengaturan)"
+            !WhatsAppHexService.connected -> "akses aktif tapi layanan belum tersambung (matikan lalu nyalakan lagi aksesnya)"
+            else -> "layanan tersambung"
+        }
+        val last = HexSettings.prefs(this).getString(WhatsAppHexService.KEY_DEBUG, "") ?: ""
+        v.text = "Status: " + state + (if (last.isNotEmpty()) "\nTerakhir: " + last else "")
+    }
+
+    private fun setCardSubtitle(card: LinearLayout, text: String) {
+        (card.findViewWithTag<TextView>("subtitle"))?.text = text
+    }
+
+    private fun setCardAccent(card: LinearLayout, color: Int) {
+        (card.getChildAt(0) as? TextView)?.setTextColor(color)
+    }
+
+    // =========================================================
+    //  TARGETS
+    // =========================================================
+
+    private fun buildTargetsTab(): View {
+        val scroll = ScrollView(this)
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(28), dp(20), dp(24))
+        }
+
+        // Header
+        col.addView(pageHeader("Multi-Target Manager", "kelola kontak, grup, dan target"))
+
+        // Search
+        searchInput = EditText(this).apply {
+            hint = "Cari target..."
+            setHintTextColor(HexTheme.textMuted)
+            setTextColor(HexTheme.textPrimary)
+            textSize = 14f
+            background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setSingleLine()
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    filterTargets(s?.toString().orEmpty())
+                }
+            })
+        }
+        col.addView(searchInput, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(16) })
+
+        // List
+        targetContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        col.addView(targetContainer)
+
+        // Form tambah
+        col.addView(sectionTitle("Tambah Target Baru").apply {
+            setPadding(0, dp(24), 0, dp(12))
+        })
+
+        val inputName = styledInput("Nama Kontak / Grup")
+        val inputId = styledInput("Nomor / Identifier")
+        col.addView(inputName)
+        col.addView(inputId.apply {
+            (layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
+        })
+
+        col.addView(primaryButton("Tambah Target") {
+            val name = inputName.text.toString().trim()
+            val id = inputId.text.toString().trim()
+            if (name.isBlank()) {
+                Toast.makeText(this, "Nama target wajib diisi", Toast.LENGTH_SHORT).show()
+                return@primaryButton
+            }
+            HexLogDatabase.saveTarget(this, TargetModel(name, id))
+            inputName.text.clear()
+            inputId.text.clear()
+            refreshTargets()
+            refreshStatusCards()
+            Toast.makeText(this, "Target ditambahkan", Toast.LENGTH_SHORT).show()
+        }.apply {
+            (layoutParams as LinearLayout.LayoutParams).topMargin = dp(14)
+        })
+
+        scroll.addView(col)
+        return scroll
+    }
+
+    private fun refreshTargets() {
+        allTargets = HexLogDatabase.getTargets(this)
+        filterTargets(searchInput.text?.toString().orEmpty())
+    }
+
+    private fun filterTargets(query: String) {
+        targetContainer.removeAllViews()
+        val q = query.trim().lowercase()
+        val filtered = if (q.isEmpty()) allTargets
+        else allTargets.filter {
+            it.name.lowercase().contains(q) || it.identifier.lowercase().contains(q)
+        }
+
+        if (filtered.isEmpty()) {
+            targetContainer.addView(TextView(this).apply {
+                text = if (allTargets.isEmpty()) "Belum ada target.\nTambahkan kontak atau grup di bawah."
+                else "Tidak ada hasil untuk \"$query\""
+                setTextColor(HexTheme.textMuted)
+                textSize = 13f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(24), 0, dp(16))
+            })
+            return
+        }
+
+        filtered.forEachIndexed { index, target ->
+            // index di allTargets (untuk hapus yang benar)
+            val realIndex = allTargets.indexOf(target)
+            targetContainer.addView(targetRow(target, realIndex))
+        }
+    }
+
+    private fun targetRow(target: TargetModel, index: Int): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(HexTheme.panelBg, 14f, HexTheme.accentDim, 1)
+            setPadding(dp(14), dp(12), dp(12), dp(12))
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.bottomMargin = dp(8)
+            layoutParams = lp
+
+            // Avatar circle
+            addView(TextView(this@MainActivity).apply {
+                text = target.name.take(1).uppercase()
+                setTextColor(HexTheme.accent)
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setTypeface(null, Typeface.BOLD)
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(HexTheme.accentGlow)
+                }
+            }, LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(12) })
+
+            val textCol = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            textCol.addView(TextView(this@MainActivity).apply {
+                text = target.name
+                setTextColor(HexTheme.textPrimary)
+                textSize = 14f
+                setTypeface(null, Typeface.BOLD)
+            })
+            if (target.identifier.isNotBlank()) {
+                textCol.addView(TextView(this@MainActivity).apply {
+                    text = target.identifier
+                    setTextColor(HexTheme.textSecondary)
+                    textSize = 12f
+                })
+            }
+            addView(textCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+            // Badge
+            addView(TextView(this@MainActivity).apply {
+                text = "Aktif"
+                setTextColor(HexTheme.success)
+                textSize = 11f
+                background = rounded(Color.parseColor("#1A3A2A"), 8f)
+                setPadding(dp(8), dp(3), dp(8), dp(3))
+            })
+
+            // Hapus
+            addView(TextView(this@MainActivity).apply {
+                text = "✕"
+                setTextColor(HexTheme.danger)
+                textSize = 16f
+                setPadding(dp(12), dp(4), dp(4), dp(4))
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Hapus target?")
+                        .setMessage("\"${target.name}\" akan dihapus.")
+                        .setPositiveButton("Hapus") { _, _ ->
+                            HexLogDatabase.removeTargetAt(this@MainActivity, index)
+                            refreshTargets()
+                            refreshStatusCards()
+                        }
+                        .setNegativeButton("Batal", null)
+                        .show()
+                }
+            })
+        }
+    }
+
+    // =========================================================
+    //  LOGS
+    // =========================================================
+
+    private fun buildLogsTab(): View {
+        val scroll = ScrollView(this)
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(28), dp(20), dp(24))
+        }
+
+        col.addView(pageHeader("Log History", "Riwayat pesan dan aktivitas"))
+
+        // Filter chips
+        logFilterRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, dp(16))
+        }
+        listOf("Semua", "Pesan", "Sistem").forEach { label ->
+            logFilterRow.addView(filterChip(label) {
+                currentLogFilter = label
+                refreshLogFilters()
+                refreshLogs()
+            })
+        }
+        col.addView(logFilterRow)
+
+        // Clear
+        col.addView(TextView(this).apply {
+            text = "Hapus semua log"
+            setTextColor(HexTheme.danger)
+            textSize = 13f
+            setPadding(0, 0, 0, dp(12))
             setOnClickListener {
+                if (HexLogDatabase.getLogs(this@MainActivity).isEmpty()) {
+                    Toast.makeText(this@MainActivity, "Log sudah kosong", Toast.LENGTH_SHORT).show()
+                } else {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Hapus semua log?")
+                        .setMessage("Riwayat terjemahan akan dihapus permanen.")
+                        .setPositiveButton("Hapus") { _, _ ->
+                            HexLogDatabase.clearLogs(this@MainActivity)
+                            refreshLogs()
+                            refreshStatusCards()
+                        }
+                        .setNegativeButton("Batal", null)
+                        .show()
+                }
+            }
+        })
+
+        logContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        col.addView(logContainer)
+
+        scroll.addView(col)
+        return scroll
+    }
+
+    private fun filterChip(label: String, onClick: () -> Unit): TextView {
+        return TextView(this).apply {
+            text = label
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.marginEnd = dp(8)
+            layoutParams = lp
+            setOnClickListener { onClick() }
+            // style di-refresh lewat refreshLogFilters
+            tag = label
+        }
+    }
+
+    private fun refreshLogFilters() {
+        for (i in 0 until logFilterRow.childCount) {
+            val chip = logFilterRow.getChildAt(i) as TextView
+            val active = chip.tag == currentLogFilter
+            chip.setTextColor(if (active) HexTheme.bg else HexTheme.textSecondary)
+            chip.background = rounded(
+                if (active) HexTheme.accent else HexTheme.surface,
+                20f,
+                if (active) HexTheme.accent else HexTheme.accentDim,
+                1
+            )
+        }
+    }
+
+    private fun refreshLogs() {
+        if (!::logContainer.isInitialized) return
+        logContainer.removeAllViews()
+        refreshLogFilters()
+
+        val logs = HexLogDatabase.getLogs(this)
+        val filtered = when (currentLogFilter) {
+            "Pesan" -> logs.filter { !it.sender.startsWith("Sistem", ignoreCase = true) }
+            "Sistem" -> logs.filter { it.sender.startsWith("Sistem", ignoreCase = true) }
+            else -> logs
+        }
+
+        if (filtered.isEmpty()) {
+            logContainer.addView(TextView(this).apply {
+                text = "Belum ada log."
+                setTextColor(HexTheme.textMuted)
+                textSize = 13f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(32), 0, 0)
+            })
+            return
+        }
+
+        for (log in filtered) {
+            logContainer.addView(logRow(log))
+        }
+    }
+
+    private fun logRow(log: LogModel): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(HexTheme.panelBg, 12f, HexTheme.accentDim, 1)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.bottomMargin = dp(8)
+            layoutParams = lp
+
+            val top = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            top.addView(TextView(this@MainActivity).apply {
+                text = log.timestamp.takeLast(8) // HH:mm:ss
+                setTextColor(HexTheme.textMuted)
+                textSize = 11f
+            })
+            top.addView(TextView(this@MainActivity).apply {
+                text = "  ·  ${log.sender}"
+                setTextColor(HexTheme.accent)
+                textSize = 12f
+                setTypeface(null, Typeface.BOLD)
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(top)
+
+            addView(TextView(this@MainActivity).apply {
+                text = log.message
+                setTextColor(HexTheme.textPrimary)
+                textSize = 13f
+                setPadding(0, dp(4), 0, 0)
+            })
+        }
+    }
+
+    // =========================================================
+    //  SETTINGS
+    // =========================================================
+
+    private fun buildSettingsTab(): View {
+        val scroll = ScrollView(this)
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(28), dp(20), dp(24))
+        }
+
+        col.addView(pageHeader("Pengaturan", "Izin, bubble, dan preferensi"))
+
+        // Izin
+        col.addView(sectionTitle("Izin Sistem"))
+        col.addView(settingsRow("Notifikasi Listener", "Diperlukan untuk membaca pesan WhatsApp") {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        })
+        col.addView(settingsRow("Overlay (Draw Over Apps)", "Untuk floating bubble") {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+        })
+        col.addView(settingsRow("Aksesibilitas", "Diperlukan untuk fitur terjemah layar") {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        })
+
+        // Floating
+        col.addView(sectionTitle("Floating Bubble").apply {
+            setPadding(0, dp(24), 0, dp(10))
+        })
+        col.addView(primaryButton("Aktifkan Floating Bubble") {
+            activateFloatingBubble()
+        })
+
+        // Ukuran bubble
+        col.addView(sectionTitle("Ukuran Bubble").apply {
+            setPadding(0, dp(24), 0, dp(8))
+        })
+        val sizeLabel = TextView(this).apply {
+            text = "Ukuran: ${HexSettings.getBubbleDp(this@MainActivity)} dp"
+            setTextColor(HexTheme.textSecondary)
+            textSize = 13f
+            setPadding(0, 0, 0, dp(6))
+        }
+        col.addView(sizeLabel)
+
+        val seek = SeekBar(this).apply {
+            max = HexSettings.BUBBLE_MAX_DP - HexSettings.BUBBLE_MIN_DP
+            progress = HexSettings.getBubbleDp(this@MainActivity) - HexSettings.BUBBLE_MIN_DP
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val dpVal = progress + HexSettings.BUBBLE_MIN_DP
+                    sizeLabel.text = "Ukuran: $dpVal dp"
+                    if (fromUser) HexSettings.setBubbleDp(this@MainActivity, dpVal)
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+        }
+        col.addView(seek)
+
+        // Notifikasi WhatsApp
+        col.addView(sectionTitle("Notifikasi WhatsApp").apply {
+            setPadding(0, dp(24), 0, dp(8))
+        })
+        col.addView(TextView(this).apply {
+            text = "Terjemahkan otomatis pesan HEX dari notifikasi WhatsApp milik target. Default mati (lebih aman)."
+            setTextColor(HexTheme.textSecondary)
+            textSize = 12f
+            setPadding(0, 0, 0, dp(10))
+        })
+
+        val notifBtn = Button(this)
+        fun refreshNotifBtn() {
+            val on = HexSettings.isNotifEnabled(this@MainActivity)
+            notifBtn.text = if (on) "Notifikasi: NYALA" else "Notifikasi: MATI"
+            notifBtn.setTextColor(if (on) Color.WHITE else HexTheme.textSecondary)
+            notifBtn.background = rounded(
+                if (on) HexTheme.accentDim else HexTheme.surface,
+                12f,
+                HexTheme.accentDim,
+                1
+            )
+        }
+        notifBtn.setOnClickListener {
+            HexSettings.setNotifEnabled(this, !HexSettings.isNotifEnabled(this))
+            refreshNotifBtn()
+            refreshStatusCards()
+        }
+        notifBtn.setPadding(dp(16), dp(12), dp(16), dp(12))
+        notifBtn.isAllCaps = false
+        refreshNotifBtn()
+        col.addView(notifBtn)
+
+        val notifStatus = TextView(this)
+        notifStatus.setTextColor(HexTheme.textSecondary)
+        notifStatus.textSize = 12f
+        notifStatus.setPadding(0, dp(10), 0, dp(4))
+        notifStatusView = notifStatus
+        col.addView(notifStatus)
+
+        val btnOpenListener = secondaryButton("Buka pengaturan akses notifikasi") {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
+        col.addView(btnOpenListener)
+
+        val btnTestNotif = secondaryButton("Tes tampilkan notifikasi") {
+            WhatsAppHexService.postTranslation(
+                this@MainActivity,
+                "Tes",
+                "Halo, notifikasi HEXTOOL berfungsi"
+            )
+            updateNotifStatusText()
+        }
+        col.addView(btnTestNotif)
+        updateNotifStatusText()
+
+        // ---- Notifikasi Silent (lokal) ----
+        col.addView(sectionTitle("Notifikasi Silent").apply {
+            setPadding(0, dp(24), 0, dp(8))
+        })
+        col.addView(TextView(this).apply {
+            text = "Senyapkan notifikasi dari aplikasi atau kata kunci tertentu. Berjalan 100% lokal lewat Notification Listener — tidak ada data yang dikirim keluar."
+            setTextColor(HexTheme.textSecondary)
+            textSize = 12f
+            setPadding(0, 0, 0, dp(10))
+        })
+
+        val silentBtn = Button(this)
+        fun refreshSilentBtn() {
+            val on = HexSettings.isSilentEnabled(this@MainActivity)
+            silentBtn.text = if (on) "Silent Mode: NYALA" else "Silent Mode: MATI"
+            silentBtn.setTextColor(if (on) Color.WHITE else HexTheme.textSecondary)
+            silentBtn.background = rounded(
+                if (on) HexTheme.accentDim else HexTheme.surface,
+                12f, HexTheme.accentDim, 1
+            )
+        }
+        silentBtn.setOnClickListener {
+            HexSettings.setSilentEnabled(this, !HexSettings.isSilentEnabled(this))
+            refreshSilentBtn()
+        }
+        silentBtn.setPadding(dp(16), dp(12), dp(16), dp(12))
+        silentBtn.isAllCaps = false
+        refreshSilentBtn()
+        col.addView(silentBtn)
+
+        col.addView(TextView(this).apply {
+            text = "Package yang di-mute (satu per baris, contoh: com.instagram.android)"
+            setTextColor(HexTheme.textMuted)
+            textSize = 11f
+            setPadding(0, dp(12), 0, dp(6))
+        })
+        val mutePkgInput = EditText(this).apply {
+            setText(HexSettings.getMutedPackages(this@MainActivity).joinToString("\n"))
+            setTextColor(HexTheme.textPrimary)
+            setHintTextColor(HexTheme.textMuted)
+            hint = "com.example.app"
+            textSize = 13f
+            minLines = 3
+            background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            typeface = Typeface.MONOSPACE
+        }
+        col.addView(mutePkgInput)
+
+        col.addView(TextView(this).apply {
+            text = "Kata kunci mute (pisahkan koma)"
+            setTextColor(HexTheme.textMuted)
+            textSize = 11f
+            setPadding(0, dp(12), 0, dp(6))
+        })
+        val muteKwInput = EditText(this).apply {
+            setText(HexSettings.getMuteKeywords(this@MainActivity).joinToString(", "))
+            setTextColor(HexTheme.textPrimary)
+            setHintTextColor(HexTheme.textMuted)
+            hint = "promo, diskon, flash sale"
+            textSize = 13f
+            background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+        }
+        col.addView(muteKwInput)
+
+        col.addView(primaryButton("Simpan Aturan Silent") {
+            val pkgs = mutePkgInput.text.toString()
+                .lines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+            HexSettings.setMutedPackages(this, pkgs)
+            val kws = muteKwInput.text.toString()
+                .split(',')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            HexSettings.setMuteKeywords(this, kws)
+            Toast.makeText(this, "Aturan silent disimpan", Toast.LENGTH_SHORT).show()
+        }.apply {
+            (layoutParams as LinearLayout.LayoutParams).topMargin = dp(12)
+        })
+
+        // ---------- TRANSLATE_FOUNDATION_V1: fondasi Terjemah Bahasa ----------
+        col.addView(sectionTitle("Terjemah Bahasa (Beta)").apply {
+            setPadding(0, dp(24), 0, dp(8))
+        })
+        col.addView(TextView(this).apply {
+            text = "Terjemahan offline lewat ML Kit. Model diunduh sekali (lebih kurang 30MB), lalu jalan tanpa internet. Untuk terjemah layar: ketuk bubble, lalu pilih Terjemah Bahasa."
+            setTextColor(HexTheme.textSecondary)
+            textSize = 12f
+            setPadding(0, 0, 0, dp(10))
+        })
+
+        var translateDirection = if (HexSettings.getTranslateDirection(this) == "ID_TO_EN") LanguageTranslator.Direction.ID_TO_EN else LanguageTranslator.Direction.EN_TO_ID
+        val dirBtnEnId = TextView(this)
+        val dirBtnIdEn = TextView(this)
+        fun refreshDirButtons() {
+            val activeBg = rounded(HexTheme.accentDim, 10f)
+            val inactiveBg = rounded(HexTheme.surface, 10f, HexTheme.accentDim, 1)
+            dirBtnEnId.background = if (translateDirection == LanguageTranslator.Direction.EN_TO_ID) activeBg else inactiveBg
+            dirBtnEnId.setTextColor(if (translateDirection == LanguageTranslator.Direction.EN_TO_ID) Color.WHITE else HexTheme.textSecondary)
+            dirBtnIdEn.background = if (translateDirection == LanguageTranslator.Direction.ID_TO_EN) activeBg else inactiveBg
+            dirBtnIdEn.setTextColor(if (translateDirection == LanguageTranslator.Direction.ID_TO_EN) Color.WHITE else HexTheme.textSecondary)
+        }
+        dirBtnEnId.text = "EN -> ID"
+        dirBtnEnId.gravity = Gravity.CENTER
+        dirBtnEnId.textSize = 13f
+        dirBtnEnId.setPadding(0, dp(10), 0, dp(10))
+        dirBtnIdEn.text = "ID -> EN"
+        dirBtnIdEn.gravity = Gravity.CENTER
+        dirBtnIdEn.textSize = 13f
+        dirBtnIdEn.setPadding(0, dp(10), 0, dp(10))
+        val dirRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        dirRow.addView(dirBtnEnId, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        dirRow.addView(dirBtnIdEn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(8) })
+        dirBtnEnId.setOnClickListener { translateDirection = LanguageTranslator.Direction.EN_TO_ID; HexSettings.setTranslateDirection(this, "EN_TO_ID"); refreshDirButtons() }
+        dirBtnIdEn.setOnClickListener { translateDirection = LanguageTranslator.Direction.ID_TO_EN; HexSettings.setTranslateDirection(this, "ID_TO_EN"); refreshDirButtons() }
+        refreshDirButtons()
+        col.addView(dirRow)
+
+        val translateStatus = TextView(this)
+        translateStatus.text = "Model belum dicek"
+        translateStatus.setTextColor(HexTheme.textMuted)
+        translateStatus.textSize = 11f
+        col.addView(translateStatus, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(10) })
+
+        col.addView(secondaryButton("Unduh Model Bahasa") {
+            translateStatus.text = "Mengunduh model (butuh internet)..."
+            LanguageTranslator.downloadModel(translateDirection) { ok, err ->
+                runOnUiThread {
+                    translateStatus.text = if (ok) "Model siap, bisa dipakai offline" else "Gagal unduh: " + err
+                }
+            }
+        }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(8) })
+
+        val translateInput = EditText(this)
+        translateInput.setTextColor(HexTheme.textPrimary)
+        translateInput.setHintTextColor(HexTheme.textMuted)
+        translateInput.hint = "Ketik atau tempel teks di sini"
+        translateInput.textSize = 13f
+        translateInput.minLines = 2
+        translateInput.background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
+        translateInput.setPadding(dp(14), dp(12), dp(14), dp(12))
+        col.addView(translateInput, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(10) })
+
+        val translateResult = TextView(this)
+        translateResult.setTextColor(HexTheme.accent)
+        translateResult.textSize = 13f
+        translateResult.setPadding(dp(14), dp(12), dp(14), dp(12))
+        translateResult.background = rounded(HexTheme.panelBg, 12f, HexTheme.accentDim, 1)
+        translateResult.visibility = android.view.View.GONE
+
+        col.addView(primaryButton("Terjemahkan") {
+            val input = translateInput.text.toString().trim()
+            if (input.isEmpty()) {
+                Toast.makeText(this, "Isi teksnya dulu", Toast.LENGTH_SHORT).show()
+            } else {
+                translateResult.visibility = android.view.View.VISIBLE
+                translateResult.text = "Menerjemahkan..."
+                LanguageTranslator.translate(translateDirection, input) { result, err ->
+                    runOnUiThread {
+                        translateResult.text = result ?: ("Gagal: " + err + " (coba unduh model dulu)")
+                    }
+                }
+            }
+        }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(10) })
+
+        col.addView(translateResult, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(8) })
+
+        // Panel size
+        col.addView(sectionTitle("Ukuran Panel Floating").apply {
+            setPadding(0, dp(24), 0, dp(10))
+        })
+        val panelRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        val panelNames = arrayOf("S", "M", "L")
+        val panelBtns = ArrayList<TextView>()
+        panelNames.forEachIndexed { i, name ->
+            val btn = TextView(this).apply {
+                text = name
+                gravity = Gravity.CENTER
+                textSize = 14f
+                setTypeface(null, Typeface.BOLD)
+                setPadding(0, dp(12), 0, dp(12))
+                setOnClickListener {
+                    HexSettings.setPanelIndex(this@MainActivity, i)
+                    refreshPanelButtons(panelBtns)
+                }
+            }
+            panelBtns.add(btn)
+            panelRow.addView(btn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                if (i > 0) marginStart = dp(8)
+            })
+        }
+        refreshPanelButtons(panelBtns)
+        col.addView(panelRow)
+
+        col.addView(TextView(this).apply {
+            text = "Copyright © Zyn / SIK Dev"
+            setTextColor(HexTheme.textMuted)
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(40), 0, dp(8))
+        })
+
+        scroll.addView(col)
+        return scroll
+    }
+
+    private fun refreshPanelButtons(btns: List<TextView>) {
+        val active = HexSettings.getPanelIndex(this)
+        btns.forEachIndexed { i, b ->
+            val on = i == active
+            b.setTextColor(if (on) HexTheme.bg else HexTheme.textSecondary)
+            b.background = rounded(
+                if (on) HexTheme.accent else HexTheme.surface,
+                12f,
+                HexTheme.accentDim,
+                1
+            )
+        }
+    }
+
+    private fun settingsRow(title: String, desc: String, onClick: () -> Unit): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(HexTheme.panelBg, 14f, HexTheme.accentDim, 1)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.bottomMargin = dp(8)
+            layoutParams = lp
+            setOnClickListener { onClick() }
+
+            val textCol = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            textCol.addView(TextView(this@MainActivity).apply {
+                text = title
+                setTextColor(HexTheme.textPrimary)
+                textSize = 14f
+                setTypeface(null, Typeface.BOLD)
+            })
+            textCol.addView(TextView(this@MainActivity).apply {
+                text = desc
+                setTextColor(HexTheme.textSecondary)
+                textSize = 12f
+            })
+            addView(textCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(TextView(this@MainActivity).apply {
+                text = "›"
+                setTextColor(HexTheme.textMuted)
+                textSize = 20f
+            })
+        }
+    }
+
+    // =========================================================
+    //  BOTTOM NAV
+    // =========================================================
+
+    private fun buildBottomNav(onSelect: (Int) -> Unit): LinearLayout {
+        navButtons.clear()
+        navIcons.clear()
+
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = GradientDrawable().apply {
+                setColor(HexTheme.panelBg)
+                setStroke(1, HexTheme.accentDim)
+            }
+            setPadding(0, dp(6), 0, dp(6))
+            elevation = dp(8).toFloat()
+        }
+
+        val items = listOf(
+            "⌂" to "Home",
+            "◎" to "Targets",
+            "☰" to "Logs",
+            "⚙" to "Settings"
+        )
+
+        items.forEachIndexed { index, (icon, label) ->
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setOnClickListener { onSelect(index) }
+            }
+            val iconView = TextView(this).apply {
+                text = icon
+                textSize = 18f
+                gravity = Gravity.CENTER
+                setTextColor(if (index == 0) HexTheme.accent else HexTheme.textMuted)
+            }
+            val labelView = TextView(this).apply {
+                text = label
+                textSize = 10f
+                gravity = Gravity.CENTER
+                setTextColor(if (index == 0) HexTheme.accent else HexTheme.textMuted)
+            }
+            navIcons.add(iconView)
+            navButtons.add(labelView)
+            navItems.add(item)
+            item.addView(iconView)
+            item.addView(labelView)
+            bar.addView(item, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        }
+        return bar
+    }
+
+    private fun switchTab(tabs: List<View>, index: Int) {
+        tabs.forEachIndexed { i, v ->
+            v.visibility = if (i == index) View.VISIBLE else View.GONE
+        }
+        navButtons.forEachIndexed { i, b ->
+            val on = i == index
+            b.setTextColor(if (on) HexTheme.accent else HexTheme.textMuted)
+            navIcons.getOrNull(i)?.setTextColor(if (on) HexTheme.accent else HexTheme.textMuted)
+        }
+        if (index == 0) refreshStatusCards()
+        if (index == 2) refreshLogs()
+    }
+
+    // =========================================================
+    //  HELPERS
+    // =========================================================
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
+
+    private fun rounded(color: Int, radius: Float, strokeColor: Int = 0, strokeWidth: Int = 0): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = radius * resources.displayMetrics.density
+            if (strokeWidth > 0) {
+                setStroke(
+                    (strokeWidth * resources.displayMetrics.density).toInt(),
+                    strokeColor
+                )
+            }
+        }
+    }
+
+    private fun roundedGradient(colorTop: Int, colorBottom: Int, radius: Float, strokeColor: Int = 0, strokeWidth: Int = 0): GradientDrawable {
+        return GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(colorTop, colorBottom)).apply {
+            cornerRadius = radius * resources.displayMetrics.density
+            if (strokeWidth > 0) { setStroke((strokeWidth * resources.displayMetrics.density).toInt(), strokeColor) }
+        }
+    }
+
+    private fun sectionTitle(text: String): TextView {
+        return TextView(this).apply {
+            this.text = text
+            setTextColor(HexTheme.textSecondary)
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            letterSpacing = 0.06f
+            setPadding(0, 0, 0, dp(10))
+        }
+    }
+
+    private fun pageHeader(title: String, subtitle: String): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, 0, dp(20))
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                setTextColor(HexTheme.textPrimary)
+                textSize = 20f
+                setTypeface(null, Typeface.BOLD)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = subtitle
+                setTextColor(HexTheme.textSecondary)
+                textSize = 13f
+                setPadding(0, dp(2), 0, 0)
+            })
+        }
+    }
+
+    private fun styledInput(hintText: String): EditText {
+        return EditText(this).apply {
+            hint = hintText
+            setHintTextColor(HexTheme.textMuted)
+            setTextColor(HexTheme.textPrimary)
+            textSize = 14f
+            background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setSingleLine()
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            layoutParams = lp
+        }
+    }
+
+    private fun primaryButton(label: String, onClick: () -> Unit): Button {
+        return Button(this).apply {
+            text = label
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            background = rounded(HexTheme.accent, 12f)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setOnClickListener { onClick() }
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            layoutParams = lp
+        }
+    }
+
+    private fun secondaryButton(label: String, onClick: () -> Unit): Button {
+        return Button(this).apply {
+            text = label
+            isAllCaps = false
+            setTextColor(HexTheme.accent)
+            textSize = 14f
+            background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setOnClickListener { onClick() }
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            layoutParams = lp
+        }
+    }
+
+    private fun activateFloatingBubble() {
+        if (Settings.canDrawOverlays(this)) {
+            startService(Intent(this, FloatingWidgetService::class.java))
+            Toast.makeText(this, "Floating Bubble diaktifkan", Toast.LENGTH_SHORT).show()
+            refreshStatusCards()
+        } else {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+            Toast.makeText(this, "Berikan izin Overlay dulu", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun openPermissionSettings() {
+        AlertDialog.Builder(this)
+            .setTitle("Izin Sistem")
+            .setMessage(
+                "Pilih izin yang ingin diatur:\n\n" +
+                    "• Notifikasi Listener — baca pesan WhatsApp\n" +
+                    "• Overlay — floating bubble\n" +
+                    "• Aksesibilitas — terjemah layar"
+            )
+            .setPositiveButton("Notifikasi") { _, _ ->
                 startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             }
-        }
-        mainLayout.addView(btnPerms)
+            .setNeutralButton("Overlay") { _, _ ->
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            }
+            .setNegativeButton("Aksesibilitas") { _, _ ->
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+            .show()
+    }
 
-        val btnFloat = Button(this).apply {
-            text = "[ AKTIFKAN FLOATING BUBBLE ]"
-            setTextColor(android.graphics.Color.parseColor("#00FF00"))
-            setBackgroundColor(android.graphics.Color.parseColor("#111111"))
-            setOnClickListener {
-                if (Settings.canDrawOverlays(this@MainActivity)) {
-                    startService(Intent(this@MainActivity, FloatingWidgetService::class.java))
-                    Toast.makeText(this@MainActivity, "Floating Diaktifkan", Toast.LENGTH_SHORT).show()
-                } else {
-                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-                    startActivity(intent)
-                }
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    1001
+                )
             }
         }
-        mainLayout.addView(btnFloat)
+    }
 
-        // Bagian Multi-Target Manager
-        val targetTitle = TextView(this).apply {
-            text = "\n[ MULTI-TARGET / GROUP CONFIG ]"
-            setTextColor(android.graphics.Color.parseColor("#00FF00"))
-            setTypeface(null, android.graphics.Typeface.BOLD)
-        }
-        mainLayout.addView(targetTitle)
+    // =========================================================
+    //  LINK / QR CHECKER (100% lokal)
+    // =========================================================
 
-        val inputName = EditText(this).apply {
-            hint = "Nama Kontak / Grup"
-            setHintTextColor(android.graphics.Color.parseColor("#555555"))
-            setTextColor(android.graphics.Color.parseColor("#00FF00"))
-            typeface = android.graphics.Typeface.MONOSPACE
-        }
-        mainLayout.addView(inputName)
-
-        val inputId = EditText(this).apply {
-            hint = "Nomor / Identifier"
-            setHintTextColor(android.graphics.Color.parseColor("#555555"))
-            setTextColor(android.graphics.Color.parseColor("#00FF00"))
-            typeface = android.graphics.Typeface.MONOSPACE
-        }
-        mainLayout.addView(inputId)
-
-        val btnAddTarget = Button(this).apply {
-            text = "[ TAMBAH TARGET ]"
-            setTextColor(android.graphics.Color.parseColor("#00FF00"))
-            setBackgroundColor(android.graphics.Color.parseColor("#111111"))
-            setOnClickListener {
-                val name = inputName.text.toString()
-                val id = inputId.text.toString()
-                if (name.isNotEmpty()) {
-                    HexLogDatabase.saveTarget(this@MainActivity, TargetModel(name, id))
-                    Toast.makeText(this@MainActivity, "Target Ditambahkan!", Toast.LENGTH_SHORT).show()
-                    inputName.text.clear()
-                    inputId.text.clear()
-                }
-            }
-        }
-        mainLayout.addView(btnAddTarget)
-
-        // Bagian Log History
-        val logTitle = TextView(this).apply {
-            text = "\n[ RIWAYAT LOG PESAN TERJEMAH ]"
-            setTextColor(android.graphics.Color.parseColor("#00FF00"))
-            setTypeface(null, android.graphics.Typeface.BOLD)
-        }
-        mainLayout.addView(logTitle)
-
-        val logContainer = LinearLayout(this).apply {
+    private fun showLinkCheckerDialog(fromClipboard: Boolean = false) {
+        val pad = dp(20)
+        val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-        }
-        mainLayout.addView(logContainer)
-
-        // Muat log tersimpan
-        val logs = HexLogDatabase.getLogs(this)
-        for (log in logs) {
-            val tvLog = TextView(this).apply {
-                text = "> [${log.timestamp}] ${log.sender}: ${log.message}"
-                setTextColor(android.graphics.Color.parseColor("#00FF00"))
-                typeface = android.graphics.Typeface.MONOSPACE
-                textSize = 12f
-                setPadding(0, 5, 0, 5)
-            }
-            logContainer.addView(tvLog)
+            setPadding(pad, pad, pad, dp(8))
         }
 
-        // Copyright Footer
-        val footer = TextView(this).apply {
-            text = "\nCopyright © Zyn / SIK Dev"
-            setTextColor(android.graphics.Color.parseColor("#555555"))
-            gravity = android.view.Gravity.CENTER
+        container.addView(TextView(this).apply {
+            text = "Pemeriksaan tautan sepenuhnya di perangkat. Tidak ada data yang dikirim ke server."
+            setTextColor(HexTheme.textSecondary)
             textSize = 12f
-        }
-        mainLayout.addView(footer)
+            setPadding(0, 0, 0, dp(12))
+        })
 
-        setContentView(scroll)
+        val input = EditText(this).apply {
+            hint = "Tempel URL atau teks berisi link"
+            setHintTextColor(HexTheme.textMuted)
+            setTextColor(HexTheme.textPrimary)
+            textSize = 14f
+            minLines = 2
+            background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+        }
+        container.addView(input)
+
+        if (fromClipboard) {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+            if (clip.isNotBlank()) input.setText(clip)
+        }
+
+        val resultView = TextView(this).apply {
+            setTextColor(HexTheme.textPrimary)
+            textSize = 13f
+            setPadding(0, dp(14), 0, 0)
+        }
+        container.addView(resultView)
+
+        fun runCheck() {
+            val raw = input.text.toString().trim()
+            if (raw.isEmpty()) {
+                resultView.text = "Masukkan URL terlebih dahulu."
+                resultView.setTextColor(HexTheme.textMuted)
+                return
+            }
+            val report = LinkSafetyChecker.check(raw)
+            val levelColor = when (report.level) {
+                LinkSafetyChecker.Level.AMAN -> HexTheme.success
+                LinkSafetyChecker.Level.HATI_HATI -> HexTheme.warning
+                LinkSafetyChecker.Level.MENCURIGAKAN -> HexTheme.danger
+            }
+            val levelLabel = when (report.level) {
+                LinkSafetyChecker.Level.AMAN -> "AMAN"
+                LinkSafetyChecker.Level.HATI_HATI -> "PERLU HATI-HATI"
+                LinkSafetyChecker.Level.MENCURIGAKAN -> "MENCURIGAKAN"
+            }
+            val sb = StringBuilder()
+            sb.append("Hasil: $levelLabel  (skor ${report.score})\n")
+            if (report.host.isNotBlank()) sb.append("Host: ${report.host}\n")
+            if (report.scheme.isNotBlank()) sb.append("Skema: ${report.scheme}\n")
+            sb.append("\nAlasan:\n")
+            report.reasons.forEach { sb.append("• $it\n") }
+            sb.append("\nCatatan: ini heuristik lokal, bukan vonis keamanan absolut.")
+            resultView.text = sb.toString()
+            resultView.setTextColor(levelColor)
+        }
+
+        val btnRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        val btnCheck = Button(this).apply {
+            text = "Periksa"
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            background = rounded(HexTheme.accent, 10f)
+            setOnClickListener { runCheck() }
+        }
+        val btnClip = Button(this).apply {
+            text = "Dari Clipboard"
+            isAllCaps = false
+            setTextColor(HexTheme.accent)
+            background = rounded(HexTheme.surface, 10f, HexTheme.accentDim, 1)
+            setOnClickListener {
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = cm.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString().orEmpty()
+                if (clip.isBlank()) {
+                    Toast.makeText(this@MainActivity, "Clipboard kosong", Toast.LENGTH_SHORT).show()
+                } else {
+                    input.setText(clip)
+                    runCheck()
+                }
+            }
+        }
+        btnRow.addView(btnCheck, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) })
+        btnRow.addView(btnClip, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(6) })
+        container.addView(btnRow)
+
+        // QR: coba intent scanner eksternal (ZXing dll) jika terpasang
+        container.addView(Button(this).apply {
+            text = "Scan QR (app scanner eksternal)"
+            isAllCaps = false
+            setTextColor(HexTheme.textSecondary)
+            background = rounded(HexTheme.surface, 10f, HexTheme.accentDim, 1)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.topMargin = dp(10)
+            layoutParams = lp
+            setOnClickListener {
+                val scan = Intent("com.google.zxing.client.android.SCAN").apply {
+                    putExtra("SCAN_MODE", "QR_CODE_MODE")
+                }
+                try {
+                    startActivityForResult(scan, 9001)
+                } catch (_: Exception) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Tidak ada app QR scanner. Install Barcode Scanner (ZXing) atau tempel hasil scan manual.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        })
+
+        AlertDialog.Builder(this)
+            .setTitle("Link / QR Checker")
+            .setView(container)
+            .setNegativeButton("Tutup", null)
+            .show()
+
+        if (fromClipboard && input.text.isNotEmpty()) runCheck()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 9001 && resultCode == RESULT_OK && data != null) {
+            val contents = data.getStringExtra("SCAN_RESULT").orEmpty()
+            if (contents.isNotBlank()) {
+                // Tampilkan dialog checker dengan hasil scan
+                showLinkCheckerDialog()
+                // Dialog baru; set via clipboard agar user langsung lihat
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("qr", contents))
+                Toast.makeText(this, "Hasil QR disalin. Buka checker lagi atau tempel manual.", Toast.LENGTH_LONG).show()
+                // Langsung cek
+                val report = LinkSafetyChecker.check(contents)
+                val level = when (report.level) {
+                    LinkSafetyChecker.Level.AMAN -> "AMAN"
+                    LinkSafetyChecker.Level.HATI_HATI -> "HATI-HATI"
+                    LinkSafetyChecker.Level.MENCURIGAKAN -> "MENCURIGAKAN"
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("Hasil QR: $level")
+                    .setMessage(
+                        "Isi: $contents\n\nHost: ${report.host}\nSkor: ${report.score}\n\n" +
+                            report.reasons.joinToString("\n") { "• $it" }
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
     }
 }

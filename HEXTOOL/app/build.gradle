@@ -39,6 +39,7 @@ dependencies {
     
     // Pustaka Gson untuk penyimpanan lokal Multi-Target & Log History
     implementation 'com.google.code.gson:gson:2.10.1'
+    implementation 'com.google.mlkit:translate:17.0.3' // TRANSLATE_FOUNDATION_V1
     
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
