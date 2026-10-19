@@ -2,6 +2,7 @@ package com.example.hextool
 
 import android.content.Context
 import android.content.SharedPreferences
+// THEME_TOGGLE_V1
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
@@ -17,6 +18,10 @@ object HexSettings {
     private const val KEY_MUTED_PACKAGES = "silent_muted_packages"
     private const val KEY_MUTE_KEYWORDS = "silent_mute_keywords"
     private const val KEY_TRANSLATE_DIRECTION = "translate_direction" // LANG_OVERLAY_V1
+
+    // NOTIF_LOG_APPS_V1: aplikasi yang notifikasinya dipantau/dicatat
+    private const val KEY_LOG_PACKAGES = "notif_log_packages"
+    private val DEFAULT_LOG_PACKAGES = setOf("com.whatsapp", "com.whatsapp.w4b")
 
     const val BUBBLE_MIN_DP = 40
     const val BUBBLE_MAX_DP = 120
@@ -67,6 +72,12 @@ object HexSettings {
         prefs(context).edit().putBoolean(KEY_SILENT_ENABLED, value).apply()
     }
 
+        fun getThemeId(context: Context): String =
+        prefs(context).getString("theme_id", HexTheme.THEME_MONO) ?: HexTheme.THEME_MONO
+
+    fun setThemeId(context: Context, value: String) {
+        prefs(context).edit().putString("theme_id", value).apply()
+    }
     fun getMutedPackages(context: Context): MutableSet<String> {
         val json = prefs(context).getString(KEY_MUTED_PACKAGES, "[]")
         return try {
@@ -103,6 +114,13 @@ object HexSettings {
             .filter { it.isNotEmpty() }
     }
 
+        fun getAesPassphraseGlobal(context: Context): String =
+        prefs(context).getString("aes_passphrase_global", "") ?: "" // AES_CRYPTO_V1
+
+    fun setAesPassphraseGlobal(context: Context, value: String) {
+        prefs(context).edit().putString("aes_passphrase_global", value).apply()
+    }
+
     fun getTranslateDirection(context: Context): String =
         prefs(context).getString(KEY_TRANSLATE_DIRECTION, "EN_TO_ID") ?: "EN_TO_ID"
 
@@ -115,5 +133,40 @@ object HexSettings {
         prefs(context).edit()
             .putString(KEY_MUTE_KEYWORDS, cleaned.joinToString(","))
             .apply()
+    }
+
+    // ---------- NOTIF_LOG_APPS_V1: aplikasi yang dipantau/dicatat di Log ----------
+
+    // Paket aplikasi yang notifikasinya diperiksa untuk HEX/AES dan dicatat ke Log.
+    // Default: WhatsApp saja (perilaku lama tetap jalan tanpa perlu diatur ulang).
+    fun getNotifPackages(context: Context): MutableSet<String> {
+        val json = prefs(context).getString(KEY_LOG_PACKAGES, null)
+            ?: return DEFAULT_LOG_PACKAGES.toMutableSet()
+        return try {
+            val type = object : TypeToken<MutableList<String>>() {}.type
+            val list = Gson().fromJson<MutableList<String>>(json, type) ?: mutableListOf()
+            list.toMutableSet()
+        } catch (_: Exception) {
+            DEFAULT_LOG_PACKAGES.toMutableSet()
+        }
+    }
+
+    fun setNotifPackages(context: Context, packages: Set<String>) {
+        prefs(context).edit()
+            .putString(KEY_LOG_PACKAGES, Gson().toJson(packages.toList()))
+            .apply()
+    }
+
+    fun addNotifPackage(context: Context, pkg: String) {
+        if (pkg.isBlank()) return
+        val set = getNotifPackages(context)
+        set.add(pkg.trim())
+        setNotifPackages(context, set)
+    }
+
+    fun removeNotifPackage(context: Context, pkg: String) {
+        val set = getNotifPackages(context)
+        set.remove(pkg)
+        setNotifPackages(context, set)
     }
 }

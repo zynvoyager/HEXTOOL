@@ -221,12 +221,18 @@ class HexClipboardService : AccessibilityService() {
         // Angka murni hampir selalu tanggal/nomor/jumlah uang, bukan HEX hasil encode.
         if (stripped.all { it in '0'..'9' }) return
 
-        val result = HexConverter.decode(
-            stripped,
-            allowWhitespace = false,
-            rejectControlChars = true
-        )
-        val text = (result as? HexConverter.DecodeResult.Success)?.text ?: return
+        val text: String = if (stripped.startsWith("3302")) { // AES_OVERLAY_V1
+            val keys = AesCipher.candidateKeys(this)
+            if (keys.isEmpty()) return
+            AesCipher.decryptCachedAsyncAny(stripped.substring(4), keys) ?: return // AES_KEYS_V1
+        } else {
+            val result = HexConverter.decode(
+                stripped,
+                allowWhitespace = false,
+                rejectControlChars = true
+            )
+            (result as? HexConverter.DecodeResult.Success)?.text ?: return
+        }
         if (text.isBlank()) return
 
         val rect = Rect()

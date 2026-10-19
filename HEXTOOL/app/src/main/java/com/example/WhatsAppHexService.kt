@@ -17,11 +17,12 @@ import java.util.Locale
 
 /**
  * NotificationListener lokal:
- * 1) WhatsApp HEX - decode pesan HEX dari target dan tampilkan terjemahan
+ * 1) HEX Notifikasi - decode pesan HEX dari target pada aplikasi yang dipantau
+ *    (diatur di tab Settings > "Aplikasi Dipantau", default: WhatsApp)
  * 2) Silent mode - batalkan notifikasi dari paket / kata kunci yang di-mute
  *
  * Tidak ada data yang dikirim keluar perangkat.
- * TAHAP_NOTIF_FIX_V1
+ * TAHAP_NOTIF_FIX_V1 / NOTIF_LOG_APPS_V1
  */
 class WhatsAppHexService : NotificationListenerService() {
 
@@ -32,7 +33,10 @@ class WhatsAppHexService : NotificationListenerService() {
 
         const val KEY_DEBUG = "notif_debug"
 
-        private val WA_PACKAGES = setOf("com.whatsapp", "com.whatsapp.w4b")
+        // NOTIF_LOG_APPS_V1: daftar paket diambil dari HexSettings (diatur user di tab Settings),
+        // bukan hardcoded lagi -- supaya aplikasi yang dipantau bisa dipilih, tidak cuma WhatsApp.
+        private fun watchedPackages(context: Context): Set<String> =
+            HexSettings.getNotifPackages(context)
 
         // true selama sistem benar-benar menyambungkan listener ke proses ini.
         @Volatile
@@ -75,10 +79,17 @@ class WhatsAppHexService : NotificationListenerService() {
 
     private class Candidate(val text: String, val member: String)
 
+    private var senderHint: String = ""
+    private val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var lastKey: String = ""
     private var lastKeyTime: Long = 0L
 
     // ---------------------------------------------------------------- lifecycle
+
+    override fun onDestroy() {
+        worker.shutdown()
+        super.onDestroy()
+    }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
@@ -104,7 +115,14 @@ class WhatsAppHexService : NotificationListenerService() {
 
         // 1) Terjemahkan dulu, supaya Silent Mode tidak ikut menghalangi.
         try {
-            handleTranslate(sbn)
+            // AES_KEYS_V1: dekripsi (PBKDF2) cukup berat, jangan di main thread.
+            worker.execute {
+                try {
+                    handleTranslate(sbn)
+                } catch (e: Exception) {
+                    saveDebug(this@WhatsAppHexService, "Error: ${e.javaClass.simpleName}")
+                }
+            }
         } catch (e: Exception) {
             saveDebug(this, "Error: ${e.javaClass.simpleName}")
         }
@@ -115,12 +133,18 @@ class WhatsAppHexService : NotificationListenerService() {
 
     // ---------------------------------------------------------------- terjemah
 
-    private fun decodeHex(s: String): String? =
-        (HexConverter.decode(
+    private fun decodeHex(s: String): String? {
+        if (s.startsWith("3302")) { // AES_NOTIF_V1
+            val keys = AesCipher.candidateKeys(this, senderHint) // AES_KEYS_V1
+            if (keys.isEmpty()) return null
+            return AesCipher.tryDecryptWithKeys(s.substring(4), keys)?.first
+        }
+        return (HexConverter.decode(
             s,
             allowWhitespace = false,
             rejectControlChars = true
         ) as? HexConverter.DecodeResult.Success)?.text
+    }
 
     @Suppress("DEPRECATION")
     private fun candidateTexts(extras: Bundle): List<Candidate> {
@@ -156,7 +180,7 @@ class WhatsAppHexService : NotificationListenerService() {
     }
 
     private fun handleTranslate(sbn: StatusBarNotification) {
-        if (sbn.packageName !in WA_PACKAGES) return
+        if (sbn.packageName !in watchedPackages(this)) return
 
         val n = sbn.notification
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
@@ -164,66 +188,52 @@ class WhatsAppHexService : NotificationListenerService() {
         val extras = n.extras
         val sender = extras.getCharSequence("android.title")?.toString().orEmpty()
         if (sender.isBlank()) return
+        senderHint = sender
 
         if (!HexSettings.isNotifEnabled(this)) {
-            saveDebug(this, "WA dari \"$sender\": terjemah notifikasi MATI di Settings")
+            saveDebug(this, "$sender: pencatatan notifikasi MATI di Settings")
             return
         }
 
-        var decoded: String? = null
-        var memberName = ""
+        // NOTIF_LOG_ALL_V1: catat SEMUA notifikasi dari aplikasi yang dipantau,
+        // tidak lagi disyaratkan HEX/AES, tidak lagi disyaratkan cocok Target.
+        // Kalau isinya kebetulan HEX/AES valid, yang dicatat hasil dekodenya;
+        // kalau bukan, dicatat apa adanya.
+        val candidates = candidateTexts(extras)
+        if (candidates.isEmpty()) {
+            saveDebug(this, "$sender: tidak ada teks notifikasi")
+            return
+        }
 
-        for (c in candidateTexts(extras)) {
-            var text = decodeHex(c.text)
-            var member = c.member
+        val raw = candidates.first().text
+        var label = sender
+        var finalText = raw
 
-            // Pesan grup dari teks notifikasi berbentuk "Nama Pengirim: isi pesan".
-            if (text == null) {
-                val sep = c.text.indexOf(": ")
-                if (sep > 0) {
-                    val rest = c.text.substring(sep + 2).trim()
-                    if (rest.length >= MIN_HEX_CHARS) {
-                        text = decodeHex(rest)
-                        if (text != null) member = c.text.substring(0, sep).trim()
-                    }
-                }
+        val sep = raw.indexOf(": ")
+        if (sep > 0) {
+            val maybeMember = raw.substring(0, sep).trim()
+            val rest = raw.substring(sep + 2).trim()
+            val decodedRest = decodeHex(rest)
+            if (decodedRest != null) {
+                finalText = decodedRest
+                if (maybeMember.isNotEmpty()) label = "$sender ($maybeMember)"
+            } else {
+                val decodedWhole = decodeHex(raw)
+                if (decodedWhole != null) finalText = decodedWhole
             }
-
-            if (text != null) {
-                decoded = text
-                memberName = member
-                break
-            }
+        } else {
+            val decodedWhole = decodeHex(raw)
+            if (decodedWhole != null) finalText = decodedWhole
         }
 
-        if (decoded == null) {
-            saveDebug(this, "WA dari \"$sender\": teks bukan HEX valid")
-            return
-        }
-
-        val targets = HexLogDatabase.getTargets(this)
-        val matchText = "$sender $memberName"
-        val isMatched = targets.any { target ->
-            (target.name.isNotBlank() &&
-                matchText.contains(target.name, ignoreCase = true)) ||
-                (target.identifier.isNotBlank() &&
-                    matchText.contains(target.identifier, ignoreCase = true))
-        }
-        if (!isMatched) {
-            saveDebug(this, "WA dari \"$sender\": HEX valid tapi tidak cocok dengan target")
-            return
-        }
-
-        val label = if (memberName.isNotEmpty()) "$sender ($memberName)" else sender
         val now = System.currentTimeMillis()
-        val key = "$label\u0000$decoded"
+        val key = "$label\u0000$finalText"
         if (key == lastKey && now - lastKeyTime < DUPLICATE_WINDOW_MS) return
         lastKey = key
         lastKeyTime = now
 
-        HexLogDatabase.addLog(this, label, decoded)
-        postTranslation(this, label, decoded)
-        saveDebug(this, "OK: pesan dari \"$label\" diterjemahkan")
+        HexLogDatabase.addLog(this, label, finalText)
+        saveDebug(this, "Dicatat dari \"$label\"")
     }
 
     // ---------------------------------------------------------------- silent mode

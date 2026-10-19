@@ -16,10 +16,13 @@ class ClipboardActivity : Activity() {
         const val MODE_ENCODE = "encode"
         const val MODE_DECODE = "decode"
         const val MODE_COPY = "copy"
+        const val MODE_ENCRYPT = "encrypt" // AES_PANEL_V1
+        private const val AES_PREFIX = "3302"
         private const val TAG = "ClipboardActivity"
     }
 
     private var handled = false
+    private var keepOpen = false // AES_KEYS_V1: true saat dialog pilih-kunci tampil
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,8 +41,10 @@ class ClipboardActivity : Activity() {
         if (hasFocus && !handled) {
             handled = true
             process()
-            finish()
-            overridePendingTransition(0, 0)
+            if (!keepOpen) {
+                finish()
+                overridePendingTransition(0, 0)
+            }
         }
     }
 
@@ -62,6 +67,16 @@ class ClipboardActivity : Activity() {
         ).show()
     }
 
+    private fun encryptAndCopy(cm: ClipboardManager, input: String, pass: String) {
+        try {
+            val output = AES_PREFIX + AesCipher.encryptToHex(input, pass)
+            cm.setPrimaryClip(ClipData.newPlainText("HEXTOOL", output))
+            toast("HEX terenkripsi disalin (${output.length} karakter)", true)
+        } catch (e: Exception) {
+            toast("Enkripsi/salin gagal: ${e.message}", true)
+        }
+    }
+
     private fun process() {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_ENCODE
@@ -77,6 +92,49 @@ class ClipboardActivity : Activity() {
 
         // Isi teks tidak dilog, hanya panjangnya.
         Log.i(TAG, "mode=$mode, inputLength=${input.length}")
+
+        // AES_PANEL_V1: dicegat sebelum jalur HEX biasa, supaya kode lama tidak disentuh.
+        if (mode == MODE_ENCRYPT) {
+            if (input.isBlank()) { toast("Teks kosong"); return }
+            val choices = AesCipher.encryptionChoices(this) // AES_KEYS_V1
+            if (choices.isEmpty()) {
+                toast("Set passphrase AES dulu (Settings atau kunci target)", true)
+                return
+            }
+            if (choices.size == 1) {
+                encryptAndCopy(cm, input, choices[0].second)
+                return
+            }
+            // Ada beberapa kunci: biarkan pengguna memilih.
+            keepOpen = true
+            val labels = choices.map { it.first }.toTypedArray()
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Enkripsi dengan kunci...")
+                .setItems(labels) { _, which -> encryptAndCopy(cm, input, choices[which].second) }
+                .setOnDismissListener {
+                    finish()
+                    overridePendingTransition(0, 0)
+                }
+                .show()
+            return
+        }
+        if (mode == MODE_DECODE && input.startsWith(AES_PREFIX)) {
+            val keys = AesCipher.candidateKeys(this) // AES_KEYS_V1
+            if (keys.isEmpty()) { toast("Set passphrase AES dulu (Settings atau kunci target)", true); return }
+            val hexPart = input.substring(AES_PREFIX.length)
+            val found = AesCipher.tryDecryptWithKeys(hexPart, keys)
+            if (found != null) {
+                try {
+                    cm.setPrimaryClip(ClipData.newPlainText("HEXTOOL", found.first))
+                    toast("Teks (AES) disalin: ${found.first.take(60)}", true)
+                } catch (e: Exception) {
+                    toast("Gagal menyalin: ${e.message}", true)
+                }
+            } else {
+                toast("Gagal dekripsi: kunci salah atau data rusak", true)
+            }
+            return
+        }
 
         val output: String = when (mode) {
             MODE_COPY -> input

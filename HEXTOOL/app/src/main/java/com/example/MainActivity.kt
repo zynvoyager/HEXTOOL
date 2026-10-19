@@ -56,6 +56,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        HexTheme.load(this) // THEME_TOGGLE_V1
 
         window.statusBarColor = HexTheme.bg
         window.navigationBarColor = HexTheme.bg
@@ -448,8 +449,12 @@ class MainActivity : AppCompatActivity() {
 
         val inputName = styledInput("Nama Kontak / Grup")
         val inputId = styledInput("Nomor / Identifier")
+        val inputKey = styledInput("Kunci AES (opsional)") // AES_TARGET_KEY_V1
         col.addView(inputName)
         col.addView(inputId.apply {
+            (layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
+        })
+        col.addView(inputKey.apply {
             (layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
         })
 
@@ -460,9 +465,11 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Nama target wajib diisi", Toast.LENGTH_SHORT).show()
                 return@primaryButton
             }
-            HexLogDatabase.saveTarget(this, TargetModel(name, id))
+            val key = inputKey.text.toString().trim()
+            HexLogDatabase.saveTarget(this, TargetModel(name, id, key.ifBlank { null }))
             inputName.text.clear()
             inputId.text.clear()
+            inputKey.text.clear()
             refreshTargets()
             refreshStatusCards()
             Toast.makeText(this, "Target ditambahkan", Toast.LENGTH_SHORT).show()
@@ -557,6 +564,36 @@ class MainActivity : AppCompatActivity() {
                 textSize = 11f
                 background = rounded(Color.parseColor("#1A3A2A"), 8f)
                 setPadding(dp(8), dp(3), dp(8), dp(3))
+            })
+
+            // Atur kunci AES per-target -- AES_TARGET_KEY_V1
+            addView(TextView(this@MainActivity).apply {
+                val hasKey = !target.aesKey.isNullOrBlank()
+                text = if (hasKey) "\uD83D\uDD12" else "\uD83D\uDD13"
+                setTextColor(if (hasKey) HexTheme.accent else HexTheme.textMuted)
+                textSize = 15f
+                setPadding(dp(10), dp(4), dp(4), dp(4))
+                setOnClickListener {
+                    val box = EditText(this@MainActivity)
+                    box.setText(target.aesKey ?: "")
+                    box.hint = "Kosongkan untuk pakai passphrase global"
+                    box.setTextColor(HexTheme.textPrimary)
+                    box.setHintTextColor(HexTheme.textMuted)
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Kunci AES untuk \"" + target.name + "\"")
+                        .setView(box)
+                        .setPositiveButton("Simpan") { _, _ ->
+                            val newKey = box.text.toString().trim()
+                            HexLogDatabase.updateTargetAt(
+                                this@MainActivity,
+                                index,
+                                target.copy(aesKey = newKey.ifBlank { null })
+                            )
+                            refreshTargets()
+                        }
+                        .setNegativeButton("Batal", null)
+                        .show()
+                }
             })
 
             // Hapus
@@ -804,11 +841,11 @@ class MainActivity : AppCompatActivity() {
         col.addView(seek)
 
         // Notifikasi WhatsApp
-        col.addView(sectionTitle("Notifikasi WhatsApp").apply {
+        col.addView(sectionTitle("Notifikasi HEX").apply {
             setPadding(0, dp(24), 0, dp(8))
         })
         col.addView(TextView(this).apply {
-            text = "Terjemahkan otomatis pesan HEX dari notifikasi WhatsApp milik target. Default mati (lebih aman)."
+            text = "Terjemahkan otomatis pesan HEX dari notifikasi aplikasi yang dipantau, lalu catat ke Log. Default mati (lebih aman)."
             setTextColor(HexTheme.textSecondary)
             textSize = 12f
             setPadding(0, 0, 0, dp(10))
@@ -858,6 +895,38 @@ class MainActivity : AppCompatActivity() {
         }
         col.addView(btnTestNotif)
         updateNotifStatusText()
+
+        // ---- NOTIF_LOG_APPS_V1: aplikasi yang dipantau untuk HEX + Log ----
+        col.addView(TextView(this).apply {
+            text = "Aplikasi yang dipantau (notifikasinya diperiksa HEX & dicatat ke Log):"
+            setTextColor(HexTheme.textMuted)
+            textSize = 11f
+            setPadding(0, dp(14), 0, dp(6))
+        })
+
+        val watchedAppsLabel = TextView(this).apply {
+            setTextColor(HexTheme.textPrimary)
+            textSize = 13f
+            typeface = Typeface.MONOSPACE
+            background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+        }
+        fun refreshWatchedAppsLabel() {
+            val pkgs = HexSettings.getNotifPackages(this@MainActivity)
+            watchedAppsLabel.text = if (pkgs.isEmpty()) {
+                "Belum ada aplikasi dipilih."
+            } else {
+                pkgs.joinToString("\n") { pkg -> appLabelFor(pkg) + "  (" + pkg + ")" }
+            }
+        }
+        refreshWatchedAppsLabel()
+        col.addView(watchedAppsLabel, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(8) })
+
+        col.addView(secondaryButton("Pilih Aplikasi yang Dipantau") {
+            showAppPickerDialog { refreshWatchedAppsLabel() }
+        }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(4) })
 
         // ---- Notifikasi Silent (lokal) ----
         col.addView(sectionTitle("Notifikasi Silent").apply {
@@ -1035,6 +1104,158 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(8) })
 
+        // ---------- THEME_TOGGLE_V1: pemilih tema ----------
+        col.addView(sectionTitle("Tema Warna").apply {
+            setPadding(0, dp(24), 0, dp(8))
+        })
+
+        val themeRowMono = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val themeDotMono = TextView(this)
+        val themeDotBiru = TextView(this)
+        val themeLabelMono = TextView(this)
+        val themeLabelBiru = TextView(this)
+
+        fun refreshThemeRows() {
+            val current = HexSettings.getThemeId(this)
+            val onMono = current != HexTheme.THEME_BIRU_LAUT
+            themeDotMono.text = if (onMono) "\u25CF" else "\u25CB"
+            themeDotBiru.text = if (!onMono) "\u25CF" else "\u25CB"
+            themeDotMono.setTextColor(if (onMono) HexTheme.accent else HexTheme.textMuted)
+            themeDotBiru.setTextColor(if (!onMono) HexTheme.accent else HexTheme.textMuted)
+        }
+
+        themeDotMono.textSize = 16f
+        themeDotMono.setPadding(0, 0, dp(10), 0)
+        themeLabelMono.text = "Hitam Putih (Default)"
+        themeLabelMono.setTextColor(HexTheme.textPrimary)
+        themeLabelMono.textSize = 13f
+        val rowMono = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(8), 0, dp(8))
+            addView(themeDotMono)
+            addView(themeLabelMono)
+            setOnClickListener {
+                HexSettings.setThemeId(this@MainActivity, HexTheme.THEME_MONO)
+                refreshThemeRows()
+                Toast.makeText(this@MainActivity, "Tema disimpan. Buka ulang aplikasi untuk menerapkan.", Toast.LENGTH_LONG).show()
+            }
+        }
+        col.addView(rowMono)
+
+        themeDotBiru.textSize = 16f
+        themeDotBiru.setPadding(0, 0, dp(10), 0)
+        themeLabelBiru.text = "Biru Laut"
+        themeLabelBiru.setTextColor(HexTheme.textPrimary)
+        themeLabelBiru.textSize = 13f
+        val rowBiru = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(8), 0, dp(8))
+            addView(themeDotBiru)
+            addView(themeLabelBiru)
+            setOnClickListener {
+                HexSettings.setThemeId(this@MainActivity, HexTheme.THEME_BIRU_LAUT)
+                refreshThemeRows()
+                Toast.makeText(this@MainActivity, "Tema disimpan. Buka ulang aplikasi untuk menerapkan.", Toast.LENGTH_LONG).show()
+            }
+        }
+        col.addView(rowBiru)
+        refreshThemeRows()
+
+        col.addView(TextView(this).apply {
+            text = "Perubahan tema terlihat setelah aplikasi dibuka ulang (termasuk bubble & overlay)."
+            setTextColor(HexTheme.textMuted)
+            textSize = 11f
+            setPadding(0, dp(4), 0, dp(4))
+        })
+
+        // ---------- AES_CRYPTO_V1: fondasi enkripsi AES ----------
+        col.addView(sectionTitle("Enkripsi AES (Beta)").apply {
+            setPadding(0, dp(24), 0, dp(8))
+        })
+        col.addView(TextView(this).apply {
+            text = "Passphrase global jadi kunci enkripsi default. Simpan passphrase yang SAMA PERSIS di HP lawan bicara -- kalau beda, dekripsi akan gagal. Kunci per target (ikon gembok di tab Targets) dicoba lebih dulu untuk pesan dari target itu, dan muncul sebagai pilihan saat menekan ENKRIPSI (AES) di panel bubble."
+            setTextColor(HexTheme.textSecondary)
+            textSize = 12f
+            setPadding(0, 0, 0, dp(10))
+        })
+
+        val aesPassInput = EditText(this)
+        aesPassInput.setTextColor(HexTheme.textPrimary)
+        aesPassInput.setHintTextColor(HexTheme.textMuted)
+        aesPassInput.hint = "Passphrase global"
+        aesPassInput.textSize = 13f
+        aesPassInput.setText(HexSettings.getAesPassphraseGlobal(this))
+        aesPassInput.background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
+        aesPassInput.setPadding(dp(14), dp(12), dp(14), dp(12))
+        col.addView(aesPassInput, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(10) })
+
+        col.addView(secondaryButton("Simpan Passphrase Global") {
+            val p = aesPassInput.text.toString()
+            if (p.isBlank()) {
+                Toast.makeText(this, "Passphrase tidak boleh kosong", Toast.LENGTH_SHORT).show()
+            } else {
+                HexSettings.setAesPassphraseGlobal(this, p)
+                Toast.makeText(this, "Passphrase global disimpan", Toast.LENGTH_SHORT).show()
+            }
+        }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(8) })
+
+        val aesTestInput = EditText(this)
+        aesTestInput.setTextColor(HexTheme.textPrimary)
+        aesTestInput.setHintTextColor(HexTheme.textMuted)
+        aesTestInput.hint = "Teks untuk tes enkripsi/dekripsi"
+        aesTestInput.textSize = 13f
+        aesTestInput.minLines = 2
+        aesTestInput.background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
+        aesTestInput.setPadding(dp(14), dp(12), dp(14), dp(12))
+        col.addView(aesTestInput, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(10) })
+
+        val aesResult = TextView(this)
+        aesResult.setTextColor(HexTheme.accent)
+        aesResult.textSize = 12f
+        aesResult.setPadding(dp(14), dp(12), dp(14), dp(12))
+        aesResult.background = rounded(HexTheme.panelBg, 12f, HexTheme.accentDim, 1)
+        aesResult.visibility = android.view.View.GONE
+
+        var lastAesHex = ""
+
+        col.addView(secondaryButton("Enkripsi (tes)") {
+            val txt = aesTestInput.text.toString()
+            val p = HexSettings.getAesPassphraseGlobal(this)
+            if (p.isBlank()) {
+                Toast.makeText(this, "Simpan passphrase dulu", Toast.LENGTH_SHORT).show()
+            } else if (txt.isBlank()) {
+                Toast.makeText(this, "Isi teksnya dulu", Toast.LENGTH_SHORT).show()
+            } else {
+                lastAesHex = AesCipher.encryptToHex(txt, p)
+                aesResult.visibility = android.view.View.VISIBLE
+                aesResult.text = "HEX terenkripsi:\n" + lastAesHex
+            }
+        }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(10) })
+
+        col.addView(secondaryButton("Dekripsi (tes, dari hasil di atas)") {
+            val p = HexSettings.getAesPassphraseGlobal(this)
+            if (lastAesHex.isBlank()) {
+                Toast.makeText(this, "Enkripsi dulu sebelum dekripsi", Toast.LENGTH_SHORT).show()
+            } else {
+                val r = AesCipher.decryptFromHex(lastAesHex, p)
+                if (r is AesCipher.DecryptResult.Success) {
+                    aesResult.visibility = android.view.View.VISIBLE
+                    aesResult.text = "Berhasil didekripsi:\n" + r.text
+                } else {
+                    aesResult.visibility = android.view.View.VISIBLE
+                    aesResult.text = "Gagal: kunci salah atau data rusak"
+                }
+            }
+        }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(8) })
+
+        col.addView(aesResult, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(8) })
+
         // Panel size
         col.addView(sectionTitle("Ukuran Panel Floating").apply {
             setPadding(0, dp(24), 0, dp(10))
@@ -1199,6 +1420,55 @@ class MainActivity : AppCompatActivity() {
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
+
+    // ---- NOTIF_LOG_APPS_V1: picker aplikasi yang dipantau untuk HEX + Log ----
+
+    private fun appLabelFor(pkg: String): String {
+        return try {
+            val ai = packageManager.getApplicationInfo(pkg, 0)
+            packageManager.getApplicationLabel(ai).toString()
+        } catch (_: Exception) {
+            pkg
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun showAppPickerDialog(onDone: () -> Unit) {
+        val launcherIntent = Intent(Intent.ACTION_MAIN, null).addCategory(Intent.CATEGORY_LAUNCHER)
+        val resolved = try {
+            packageManager.queryIntentActivities(launcherIntent, 0)
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        val apps = resolved
+            .mapNotNull { it.activityInfo?.packageName }
+            .distinct()
+            .filter { it != packageName }
+            .map { pkg -> pkg to appLabelFor(pkg) }
+            .sortedBy { it.second.lowercase() }
+
+        if (apps.isEmpty()) {
+            Toast.makeText(this, "Tidak ada aplikasi ditemukan", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val current = HexSettings.getNotifPackages(this)
+        val checked = BooleanArray(apps.size) { i -> apps[i].first in current }
+        val labels = apps.map { "${it.second}\n${it.first}" }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Pilih Aplikasi yang Dipantau")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
+            .setPositiveButton("Simpan") { _, _ ->
+                val selected = apps.indices.filter { checked[it] }.map { apps[it].first }.toSet()
+                HexSettings.setNotifPackages(this, selected)
+                onDone()
+                Toast.makeText(this, "Aplikasi dipantau disimpan", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Batal", null)
+            .show()
+    }
 
     private fun rounded(color: Int, radius: Float, strokeColor: Int = 0, strokeWidth: Int = 0): GradientDrawable {
         return GradientDrawable().apply {

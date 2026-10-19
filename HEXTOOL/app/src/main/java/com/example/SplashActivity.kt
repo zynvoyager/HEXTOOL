@@ -28,6 +28,7 @@ class SplashActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        HexTheme.load(this) // THEME_TOGGLE_V1
 
         window.statusBarColor = Color.BLACK
         window.navigationBarColor = Color.BLACK

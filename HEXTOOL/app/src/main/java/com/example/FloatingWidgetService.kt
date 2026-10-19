@@ -116,6 +116,7 @@ class FloatingWidgetService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        HexTheme.load(this) // THEME_TOGGLE_V1
 
         windowManager =
             getSystemService(WINDOW_SERVICE) as WindowManager
@@ -387,6 +388,17 @@ class FloatingWidgetService : Service() {
                 },
                 dp(4)
             )
+        )
+
+        // Enkripsi AES (hasil ditandai 3302) -- AES_PANEL_V1
+        root.addView(
+            makeButton("ENKRIPSI (AES)", HexTheme.warning) {
+                startClipboardActivity(ClipboardActivity.MODE_ENCRYPT, input.text.toString())
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(4) }
         )
 
         // Ukuran panel dan tutup

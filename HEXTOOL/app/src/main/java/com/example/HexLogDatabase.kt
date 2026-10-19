@@ -8,7 +8,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-data class TargetModel(val name: String, val identifier: String)
+data class TargetModel(val name: String, val identifier: String, val aesKey: String? = null) // AES_TARGET_KEY_V1
 data class LogModel(val timestamp: String, val sender: String, val message: String)
 
 object HexLogDatabase {
@@ -46,6 +46,15 @@ object HexLogDatabase {
         val targets = getTargets(context)
         targets.add(target)
         writeTargets(context, targets)
+    }
+
+    @Synchronized
+    fun updateTargetAt(context: Context, index: Int, target: TargetModel) {
+        val targets = getTargets(context)
+        if (index in targets.indices) {
+            targets[index] = target
+            writeTargets(context, targets)
+        }
     }
 
     @Synchronized
