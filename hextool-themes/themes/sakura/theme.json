@@ -1,0 +1,23 @@
+{
+  "id": "sakura",
+  "name": "Sakura",
+  "version": 1,
+  "colors": {
+    "bg": "#140A10",
+    "panelBg": "#1E111A",
+    "panelBgAlt": "#261622",
+    "surface": "#321D2C",
+    "accent": "#F06292",
+    "accentSoft": "#F8BBD0",
+    "accentDim": "#6B2A44",
+    "accentGlow": "#3A1626",
+    "textPrimary": "#FFF0F5",
+    "textSecondary": "#CFA9B8",
+    "textMuted": "#86616F"
+  },
+  "images": {
+    "background": "bg.jpg",
+    "mascot": "mascot.png",
+    "splash": "splash.png"
+  }
+}

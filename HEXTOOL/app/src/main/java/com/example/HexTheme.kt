@@ -1,7 +1,10 @@
 package com.example.hextool
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.widget.ImageView
+import java.io.File
 
 /**
  * Pusat warna HEXTOOL. THEME_TOGGLE_V1: dua tema (Hitam Putih default, Biru Laut),
@@ -47,8 +50,58 @@ object HexTheme {
     const val THEME_MONO = "MONO"
     const val THEME_BIRU_LAUT = "BIRU_LAUT"
 
+    // THEME_PLUGIN_V1: gambar dari tema unduhan (kosong = pakai bawaan APK)
+    private val pluginImages = HashMap<String, File>()
+
     fun load(context: Context) {
-        if (HexSettings.getThemeId(context) == THEME_BIRU_LAUT) applyBiruLaut() else applyMono()
+        pluginImages.clear()
+        val id = HexSettings.getThemeId(context)
+        when (id) {
+            THEME_BIRU_LAUT -> applyBiruLaut()
+            THEME_MONO -> applyMono()
+            else -> if (!applyPlugin(context, id)) applyMono()
+        }
+    }
+
+    /** kind: "background" | "mascot" | "splash". Fallback ke resource bawaan. */
+    fun setImage(iv: ImageView, kind: String, fallbackRes: Int) {
+        val f = pluginImages[kind]
+        if (f != null && f.exists()) {
+            try {
+                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(f.path, o)
+                var sample = 1
+                while (o.outWidth / sample > 1080 || o.outHeight / sample > 1920) sample *= 2
+                val bmp = BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = sample })
+                if (bmp != null) { iv.setImageBitmap(bmp); return }
+            } catch (_: Throwable) { }
+        }
+        iv.setImageResource(fallbackRes)
+    }
+
+    private fun applyPlugin(context: Context, id: String): Boolean {
+        val json = ThemeManager.readTheme(context, id) ?: return false
+        return try {
+            val c = json.getJSONObject("colors")
+            fun col(k: String) = Color.parseColor(c.getString(k))
+            val nBg = col("bg"); val nPanel = col("panelBg"); val nPanelAlt = col("panelBgAlt")
+            val nSurface = col("surface"); val nAccent = col("accent"); val nSoft = col("accentSoft")
+            val nDim = col("accentDim"); val nGlow = col("accentGlow")
+            val nTp = col("textPrimary"); val nTs = col("textSecondary"); val nTm = col("textMuted")
+            bg = nBg; panelBg = nPanel; panelBgAlt = nPanelAlt; surface = nSurface
+            accent = nAccent; accentSoft = nSoft; accentDim = nDim; accentGlow = nGlow
+            textPrimary = nTp; textSecondary = nTs; textMuted = nTm
+            // legacy diturunkan dari warna utama
+            green = nAccent; cyan = nSoft; dark = nPanel; black = nBg
+            overlayGrey = nSurface; grey = nTm; accentDark = nDim; buttonBg = nGlow
+            json.optJSONObject("images")?.let { im ->
+                for (k in ThemeManager.IMAGE_KEYS) {
+                    val name = im.optString(k, "")
+                    if (name.isNotEmpty()) pluginImages[k] = File(ThemeManager.themeDir(context, id), name)
+                }
+            }
+            true
+        } catch (e: Exception) { false }
     }
 
     private fun applyMono() {

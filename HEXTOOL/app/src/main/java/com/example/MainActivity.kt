@@ -1,4 +1,4 @@
-package com.example.hextool
+﻿package com.example.hextool
 
 import android.Manifest
 import android.content.ClipData
@@ -36,6 +36,10 @@ import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        const val EXTRA_TAB = "extra_tab" // 0 Home, 1 Target, 2 Log, 3 Pengaturan
+    }
+
     private lateinit var targetContainer: LinearLayout
     private lateinit var logContainer: LinearLayout
     private lateinit var logFilterRow: LinearLayout
@@ -68,7 +72,7 @@ class MainActivity : AppCompatActivity() {
         // Background topo (tipis)
         root.addView(
             ImageView(this).apply {
-                setImageResource(R.drawable.bg_topo)
+                HexTheme.setImage(this, "background", R.drawable.bg_topo)
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 alpha = 0.18f
             },
@@ -123,13 +127,33 @@ class MainActivity : AppCompatActivity() {
         refreshLogs()
         refreshStatusCards()
         requestNotificationPermission()
+        openRequestedTab(intent)
     }
 
     override fun onResume() {
         super.onResume()
         refreshTargets()
         refreshLogs()
+        if (pendingBubbleStart) {
+            pendingBubbleStart = false
+            if (Settings.canDrawOverlays(this)) activateFloatingBubble()
+        }
         refreshStatusCards()
+        statusHandler.removeCallbacks(statusTicker)
+        statusHandler.postDelayed(statusTicker, 2000L)
+    }
+
+    // Dibuka dari menu bubble (Target / Log / Pengaturan) -> langsung ke tab yang dimaksud.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openRequestedTab(intent)
+    }
+
+    private fun openRequestedTab(intent: Intent?) {
+        val tab = intent?.getIntExtra(EXTRA_TAB, -1) ?: -1
+        if (tab in 0..3) navItems.getOrNull(tab)?.performClick()
+        intent?.removeExtra(EXTRA_TAB)
     }
 
     // =========================================================
@@ -151,7 +175,7 @@ class MainActivity : AppCompatActivity() {
         }
         header.addView(
             ImageView(this).apply {
-                setImageResource(R.drawable.hex_dragon)
+                HexTheme.setImage(this, "mascot", R.drawable.cat_hex)
                 scaleType = ImageView.ScaleType.FIT_CENTER
             },
             LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(12) }
@@ -258,73 +282,9 @@ class MainActivity : AppCompatActivity() {
         return scroll
     }
 
-    private fun statusCard(title: String, subtitle: String, accent: Int): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = roundedGradient(HexTheme.panelBgAlt, HexTheme.panelBg, 16f, HexTheme.accentDim, 1)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            addView(TextView(this@MainActivity).apply {
-                text = title
-                setTextColor(accent)
-                textSize = 13f
-                setTypeface(null, Typeface.BOLD)
-            })
-            addView(TextView(this@MainActivity).apply {
-                text = subtitle
-                setTextColor(HexTheme.textSecondary)
-                textSize = 12f
-                setPadding(0, dp(4), 0, 0)
-                tag = "subtitle"
-            })
-        }
-    }
 
-    private fun featureRow(icon: String, title: String, desc: String, onClick: () -> Unit): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = rounded(HexTheme.panelBg, 14f, HexTheme.accentDim, 1)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            setOnClickListener { onClick() }
-            isClickable = true; isFocusable = true; foreground = run { val tv = android.util.TypedValue(); context.theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true); androidx.core.content.ContextCompat.getDrawable(context, tv.resourceId) }
 
-            addView(TextView(this@MainActivity).apply {
-                text = icon
-                setTextColor(HexTheme.accent)
-                textSize = 18f
-                gravity = Gravity.CENTER
-            }.also { it.background = rounded(HexTheme.accentGlow, 18f) }, LinearLayout.LayoutParams(dp(36), dp(36))) // HOME_POLISH_V1
 
-            val textCol = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-            }
-            textCol.addView(TextView(this@MainActivity).apply {
-                text = title
-                setTextColor(HexTheme.textPrimary)
-                textSize = 14f
-                setTypeface(null, Typeface.BOLD)
-            })
-            textCol.addView(TextView(this@MainActivity).apply {
-                text = desc
-                setTextColor(HexTheme.textSecondary)
-                textSize = 12f
-            })
-            addView(textCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-
-            addView(TextView(this@MainActivity).apply {
-                text = "›"
-                setTextColor(HexTheme.textMuted)
-                textSize = 20f
-            })
-        }.also {
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(10)
-            it.layoutParams = lp
-        }
-    }
 
     private fun refreshStatusCards() {
         ensureListenerBound()
@@ -332,28 +292,49 @@ class MainActivity : AppCompatActivity() {
         val targets = HexLogDatabase.getTargets(this)
         val logs = HexLogDatabase.getLogs(this)
         val overlayOk = Settings.canDrawOverlays(this)
-        val notifOn = HexSettings.isNotifEnabled(this) && isListenerReady()
+        val listenerOk = isListenerReady()
+        val a11yOk = HexClipboardService.instance != null
+        val bubbleOn = FloatingWidgetService.running
 
-        setCardSubtitle(cardTarget, "${targets.size} Aktif")
-        setCardSubtitle(cardLog, "${logs.size} Entri")
+        val activeTargets = targets.count { it.isEnabled() }
+        setCardAccent(cardTarget, if (activeTargets == 0) HexTheme.warning else HexTheme.success,
+            "$activeTargets Aktif",
+            if (targets.isEmpty()) "Belum ada target" else "dari ${targets.size} target")
+        setCardAccent(cardLog, HexTheme.accent, "${logs.size} Entri", "Riwayat tersimpan")
 
-        if (overlayOk) {
-            setCardSubtitle(cardFloating, "Siap")
-            setCardAccent(cardFloating, HexTheme.success)
+        when {
+            bubbleOn -> setCardAccent(cardFloating, HexTheme.success, "Aktif", "Bubble tampil")
+            overlayOk -> setCardAccent(cardFloating, HexTheme.textMuted, "Nonaktif", "Siap diaktifkan")
+            else -> setCardAccent(cardFloating, HexTheme.warning, "Nonaktif", "Butuh izin overlay")
+        }
+
+        val izinText = "Overlay " + (if (overlayOk) "✓" else "✗") +
+            "  Notif " + (if (listenerOk) "✓" else "✗") +
+            "  Aksesibilitas " + (if (a11yOk) "✓" else "✗")
+        val izinAll = overlayOk && listenerOk && a11yOk
+        setCardAccent(cardIzin, if (izinAll) HexTheme.success else HexTheme.warning,
+            if (izinAll) "Lengkap" else "Belum lengkap", izinText)
+
+        // Sistem: sehat bila pembaca notifikasi tersambung (fitur inti).
+        if (listenerOk) {
+            setCardAccent(cardSistem, HexTheme.success, "Berjalan normal", "Listener tersambung")
         } else {
-            setCardSubtitle(cardFloating, "Butuh izin")
-            setCardAccent(cardFloating, HexTheme.warning)
+            setCardAccent(cardSistem, HexTheme.warning, "Perlu perhatian", "Listener notifikasi belum tersambung")
         }
+    }
 
-        val izinText = buildString {
-            append(if (overlayOk) "Overlay ✓  " else "Overlay ✗  ")
-            append(if (notifOn) "Notif ✓" else "Notif ✗")
+    // Segarkan status tiap 2 dtk selama layar terbuka (bubble / izin bisa berubah di luar app).
+    private val statusHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val statusTicker = object : Runnable {
+        override fun run() {
+            refreshStatusCards()
+            statusHandler.postDelayed(this, 2000L)
         }
-        setCardSubtitle(cardIzin, izinText)
-        setCardAccent(cardIzin, if (overlayOk) HexTheme.success else HexTheme.warning)
+    }
 
-        setCardSubtitle(cardSistem, "Berjalan normal")
-        setCardAccent(cardSistem, HexTheme.success)
+    override fun onPause() {
+        statusHandler.removeCallbacks(statusTicker)
+        super.onPause()
     }
 
     // ---------- TAHAP_NOTIF_FIX_V1: status & penyambungan ulang listener ----------
@@ -396,9 +377,7 @@ class MainActivity : AppCompatActivity() {
         (card.findViewWithTag<TextView>("subtitle"))?.text = text
     }
 
-    private fun setCardAccent(card: LinearLayout, color: Int) {
-        (card.getChildAt(0) as? TextView)?.setTextColor(color)
-    }
+
 
     // =========================================================
     //  TARGETS
@@ -412,7 +391,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Header
-        col.addView(pageHeader("Multi-Target Manager", "kelola kontak, grup, dan target"))
+        col.addView(pageHeader("Multi-Target Manager", "ketuk Aktif/Mati untuk menyalakan, ketuk nama untuk mengubah"))
 
         // Search
         searchInput = EditText(this).apply {
@@ -556,14 +535,24 @@ class MainActivity : AppCompatActivity() {
                 })
             }
             addView(textCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            textCol.setOnClickListener { showEditTargetDialog(target, index) } // TARGETS_V2
 
-            // Badge
+            // Badge Aktif/Mati -- TARGETS_V2: bisa diketuk untuk menyalakan/mematikan target
+            val on = target.isEnabled()
+            if (!on) alpha = 0.6f
             addView(TextView(this@MainActivity).apply {
-                text = "Aktif"
-                setTextColor(HexTheme.success)
+                text = if (on) "Aktif" else "Mati"
+                setTextColor(if (on) HexTheme.success else HexTheme.textMuted)
                 textSize = 11f
-                background = rounded(Color.parseColor("#1A3A2A"), 8f)
+                background = rounded(
+                    if (on) Color.parseColor("#1A3A2A") else HexTheme.surface, 8f
+                )
                 setPadding(dp(8), dp(3), dp(8), dp(3))
+                setOnClickListener {
+                    HexLogDatabase.setTargetEnabled(this@MainActivity, index, !on)
+                    refreshTargets()
+                    refreshStatusCards()
+                }
             })
 
             // Atur kunci AES per-target -- AES_TARGET_KEY_V1
@@ -616,6 +605,42 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         }
+    }
+
+    // TARGETS_V2: ubah nama / identifier target.
+    private fun showEditTargetDialog(target: TargetModel, index: Int) {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val nameBox = EditText(this).apply {
+            hint = "Nama Kontak / Grup"
+            setText(target.name)
+        }
+        val idBox = EditText(this).apply {
+            hint = "Nomor / Identifier"
+            setText(target.identifier)
+        }
+        form.addView(nameBox)
+        form.addView(idBox)
+        AlertDialog.Builder(this)
+            .setTitle("Ubah target")
+            .setView(form)
+            .setPositiveButton("Simpan") { _, _ ->
+                val newName = nameBox.text.toString().trim()
+                if (newName.isBlank()) {
+                    Toast.makeText(this, "Nama target wajib diisi", Toast.LENGTH_SHORT).show()
+                } else {
+                    HexLogDatabase.updateTargetAt(
+                        this, index,
+                        target.copy(name = newName, identifier = idBox.text.toString().trim())
+                    )
+                    refreshTargets()
+                    refreshStatusCards()
+                }
+            }
+            .setNegativeButton("Batal", null)
+            .show()
     }
 
     // =========================================================
@@ -780,7 +805,7 @@ class MainActivity : AppCompatActivity() {
     //  SETTINGS
     // =========================================================
 
-    private fun buildSettingsTab(): View {
+        private fun buildSettingsTab(): View {
         val scroll = ScrollView(this)
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -789,41 +814,33 @@ class MainActivity : AppCompatActivity() {
 
         col.addView(pageHeader("Pengaturan", "Izin, bubble, dan preferensi"))
 
-        // Izin
-        col.addView(sectionTitle("Izin Sistem"))
-        col.addView(settingsRow("Notifikasi Listener", "Diperlukan untuk membaca pesan WhatsApp") {
+        // Izin (terbuka default)
+        val izinBox = collapsibleSection(col, "Izin Sistem", expanded = true, topMarginDp = 0)
+        izinBox.addView(settingsRow("Notifikasi Listener", "Diperlukan untuk membaca pesan WhatsApp") {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         })
-        col.addView(settingsRow("Overlay (Draw Over Apps)", "Untuk floating bubble") {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
-            startActivity(intent)
+        izinBox.addView(settingsRow("Overlay (Draw Over Apps)", "Untuk floating bubble") {
+            openOverlayPermission(startBubbleAfterGrant = false)
         })
-        col.addView(settingsRow("Aksesibilitas", "Diperlukan untuk fitur terjemah layar") {
+        izinBox.addView(settingsRow("Aksesibilitas", "Diperlukan untuk fitur terjemah layar") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         })
 
         // Floating
-        col.addView(sectionTitle("Floating Bubble").apply {
-            setPadding(0, dp(24), 0, dp(10))
-        })
-        col.addView(primaryButton("Aktifkan Floating Bubble") {
+        val bubbleBox = collapsibleSection(col, "Floating Bubble")
+        bubbleBox.addView(primaryButton("Aktifkan Floating Bubble") {
             activateFloatingBubble()
         })
 
         // Ukuran bubble
-        col.addView(sectionTitle("Ukuran Bubble").apply {
-            setPadding(0, dp(24), 0, dp(8))
-        })
+        val sizeBox = collapsibleSection(col, "Ukuran Bubble")
         val sizeLabel = TextView(this).apply {
             text = "Ukuran: ${HexSettings.getBubbleDp(this@MainActivity)} dp"
             setTextColor(HexTheme.textSecondary)
             textSize = 13f
             setPadding(0, 0, 0, dp(6))
         }
-        col.addView(sizeLabel)
+        sizeBox.addView(sizeLabel)
 
         val seek = SeekBar(this).apply {
             max = HexSettings.BUBBLE_MAX_DP - HexSettings.BUBBLE_MIN_DP
@@ -838,14 +855,12 @@ class MainActivity : AppCompatActivity() {
                 override fun onStopTrackingTouch(sb: SeekBar?) {}
             })
         }
-        col.addView(seek)
+        sizeBox.addView(seek)
 
         // Notifikasi WhatsApp
-        col.addView(sectionTitle("Notifikasi HEX").apply {
-            setPadding(0, dp(24), 0, dp(8))
-        })
-        col.addView(TextView(this).apply {
-            text = "Terjemahkan otomatis pesan HEX dari notifikasi aplikasi yang dipantau, lalu catat ke Log. Default mati (lebih aman)."
+        val notifBox = collapsibleSection(col, "Notifikasi WhatsApp")
+        notifBox.addView(TextView(this).apply {
+            text = "Terjemahkan otomatis pesan HEX dari notifikasi WhatsApp milik target. Default mati (lebih aman)."
             setTextColor(HexTheme.textSecondary)
             textSize = 12f
             setPadding(0, 0, 0, dp(10))
@@ -871,19 +886,19 @@ class MainActivity : AppCompatActivity() {
         notifBtn.setPadding(dp(16), dp(12), dp(16), dp(12))
         notifBtn.isAllCaps = false
         refreshNotifBtn()
-        col.addView(notifBtn)
+        notifBox.addView(notifBtn)
 
         val notifStatus = TextView(this)
         notifStatus.setTextColor(HexTheme.textSecondary)
         notifStatus.textSize = 12f
         notifStatus.setPadding(0, dp(10), 0, dp(4))
         notifStatusView = notifStatus
-        col.addView(notifStatus)
+        notifBox.addView(notifStatus)
 
         val btnOpenListener = secondaryButton("Buka pengaturan akses notifikasi") {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
-        col.addView(btnOpenListener)
+        notifBox.addView(btnOpenListener)
 
         val btnTestNotif = secondaryButton("Tes tampilkan notifikasi") {
             WhatsAppHexService.postTranslation(
@@ -893,47 +908,33 @@ class MainActivity : AppCompatActivity() {
             )
             updateNotifStatusText()
         }
-        col.addView(btnTestNotif)
+        notifBox.addView(btnTestNotif)
         updateNotifStatusText()
 
-        // ---- NOTIF_LOG_APPS_V1: aplikasi yang dipantau untuk HEX + Log ----
-        col.addView(TextView(this).apply {
-            text = "Aplikasi yang dipantau (notifikasinya diperiksa HEX & dicatat ke Log):"
-            setTextColor(HexTheme.textMuted)
-            textSize = 11f
-            setPadding(0, dp(14), 0, dp(6))
-        })
-
-        val watchedAppsLabel = TextView(this).apply {
-            setTextColor(HexTheme.textPrimary)
-            textSize = 13f
-            typeface = Typeface.MONOSPACE
-            background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
-            setPadding(dp(14), dp(12), dp(14), dp(12))
+        // ---- NOTIF_LOG_APPS_V1: aplikasi yang dipantau ----
+        val appsBox = collapsibleSection(col, "Aplikasi Dipantau (Log)")
+        val appsInfo = TextView(this).apply {
+            setTextColor(HexTheme.textSecondary)
+            textSize = 12f
+            setPadding(0, 0, 0, dp(10))
         }
-        fun refreshWatchedAppsLabel() {
-            val pkgs = HexSettings.getNotifPackages(this@MainActivity)
-            watchedAppsLabel.text = if (pkgs.isEmpty()) {
-                "Belum ada aplikasi dipilih."
-            } else {
-                pkgs.joinToString("\n") { pkg -> appLabelFor(pkg) + "  (" + pkg + ")" }
-            }
+        fun refreshAppsInfo() {
+            val pm = packageManager
+            val names = HexSettings.getNotifPackages(this).map { pkg ->
+                try { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }
+                catch (_: Exception) { pkg }
+            }.sorted()
+            appsInfo.text = "Notifikasi dari aplikasi ini dicek dan dicatat ke Log:\n" +
+                (if (names.isEmpty()) "(belum ada)" else names.joinToString(", "))
         }
-        refreshWatchedAppsLabel()
-        col.addView(watchedAppsLabel, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(8) })
-
-        col.addView(secondaryButton("Pilih Aplikasi yang Dipantau") {
-            showAppPickerDialog { refreshWatchedAppsLabel() }
-        }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(4) })
+        refreshAppsInfo()
+        appsBox.addView(appsInfo)
+        appsBox.addView(primaryButton("Pilih Aplikasi") { showNotifAppPicker { refreshAppsInfo() } })
 
         // ---- Notifikasi Silent (lokal) ----
-        col.addView(sectionTitle("Notifikasi Silent").apply {
-            setPadding(0, dp(24), 0, dp(8))
-        })
-        col.addView(TextView(this).apply {
-            text = "Senyapkan notifikasi dari aplikasi atau kata kunci tertentu. Berjalan 100% lokal lewat Notification Listener — tidak ada data yang dikirim keluar."
+        val silentBox = collapsibleSection(col, "Notifikasi Silent")
+        silentBox.addView(TextView(this).apply {
+            text = "Senyapkan notifikasi dari aplikasi atau kata kunci tertentu. Berjalan 100% lokal lewat Notification Listener -- tidak ada data yang dikirim keluar."
             setTextColor(HexTheme.textSecondary)
             textSize = 12f
             setPadding(0, 0, 0, dp(10))
@@ -956,9 +957,9 @@ class MainActivity : AppCompatActivity() {
         silentBtn.setPadding(dp(16), dp(12), dp(16), dp(12))
         silentBtn.isAllCaps = false
         refreshSilentBtn()
-        col.addView(silentBtn)
+        silentBox.addView(silentBtn)
 
-        col.addView(TextView(this).apply {
+        silentBox.addView(TextView(this).apply {
             text = "Package yang di-mute (satu per baris, contoh: com.instagram.android)"
             setTextColor(HexTheme.textMuted)
             textSize = 11f
@@ -975,9 +976,9 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(14), dp(12), dp(14), dp(12))
             typeface = Typeface.MONOSPACE
         }
-        col.addView(mutePkgInput)
+        silentBox.addView(mutePkgInput)
 
-        col.addView(TextView(this).apply {
+        silentBox.addView(TextView(this).apply {
             text = "Kata kunci mute (pisahkan koma)"
             setTextColor(HexTheme.textMuted)
             textSize = 11f
@@ -992,9 +993,9 @@ class MainActivity : AppCompatActivity() {
             background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
             setPadding(dp(14), dp(12), dp(14), dp(12))
         }
-        col.addView(muteKwInput)
+        silentBox.addView(muteKwInput)
 
-        col.addView(primaryButton("Simpan Aturan Silent") {
+        silentBox.addView(primaryButton("Simpan Aturan Silent") {
             val pkgs = mutePkgInput.text.toString()
                 .lines()
                 .map { it.trim() }
@@ -1012,10 +1013,8 @@ class MainActivity : AppCompatActivity() {
         })
 
         // ---------- TRANSLATE_FOUNDATION_V1: fondasi Terjemah Bahasa ----------
-        col.addView(sectionTitle("Terjemah Bahasa (Beta)").apply {
-            setPadding(0, dp(24), 0, dp(8))
-        })
-        col.addView(TextView(this).apply {
+        val translateBox = collapsibleSection(col, "Terjemah Bahasa (Beta)")
+        translateBox.addView(TextView(this).apply {
             text = "Terjemahan offline lewat ML Kit. Model diunduh sekali (lebih kurang 30MB), lalu jalan tanpa internet. Untuk terjemah layar: ketuk bubble, lalu pilih Terjemah Bahasa."
             setTextColor(HexTheme.textSecondary)
             textSize = 12f
@@ -1047,17 +1046,17 @@ class MainActivity : AppCompatActivity() {
         dirBtnEnId.setOnClickListener { translateDirection = LanguageTranslator.Direction.EN_TO_ID; HexSettings.setTranslateDirection(this, "EN_TO_ID"); refreshDirButtons() }
         dirBtnIdEn.setOnClickListener { translateDirection = LanguageTranslator.Direction.ID_TO_EN; HexSettings.setTranslateDirection(this, "ID_TO_EN"); refreshDirButtons() }
         refreshDirButtons()
-        col.addView(dirRow)
+        translateBox.addView(dirRow)
 
         val translateStatus = TextView(this)
         translateStatus.text = "Model belum dicek"
         translateStatus.setTextColor(HexTheme.textMuted)
         translateStatus.textSize = 11f
-        col.addView(translateStatus, LinearLayout.LayoutParams(
+        translateBox.addView(translateStatus, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(10) })
 
-        col.addView(secondaryButton("Unduh Model Bahasa") {
+        translateBox.addView(secondaryButton("Unduh Model Bahasa") {
             translateStatus.text = "Mengunduh model (butuh internet)..."
             LanguageTranslator.downloadModel(translateDirection) { ok, err ->
                 runOnUiThread {
@@ -1074,7 +1073,7 @@ class MainActivity : AppCompatActivity() {
         translateInput.minLines = 2
         translateInput.background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
         translateInput.setPadding(dp(14), dp(12), dp(14), dp(12))
-        col.addView(translateInput, LinearLayout.LayoutParams(
+        translateBox.addView(translateInput, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(10) })
 
@@ -1085,7 +1084,7 @@ class MainActivity : AppCompatActivity() {
         translateResult.background = rounded(HexTheme.panelBg, 12f, HexTheme.accentDim, 1)
         translateResult.visibility = android.view.View.GONE
 
-        col.addView(primaryButton("Terjemahkan") {
+        translateBox.addView(primaryButton("Terjemahkan") {
             val input = translateInput.text.toString().trim()
             if (input.isEmpty()) {
                 Toast.makeText(this, "Isi teksnya dulu", Toast.LENGTH_SHORT).show()
@@ -1100,16 +1099,13 @@ class MainActivity : AppCompatActivity() {
             }
         }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(10) })
 
-        col.addView(translateResult, LinearLayout.LayoutParams(
+        translateBox.addView(translateResult, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(8) })
 
         // ---------- THEME_TOGGLE_V1: pemilih tema ----------
-        col.addView(sectionTitle("Tema Warna").apply {
-            setPadding(0, dp(24), 0, dp(8))
-        })
+        val themeBox = collapsibleSection(col, "Tema Warna")
 
-        val themeRowMono = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val themeDotMono = TextView(this)
         val themeDotBiru = TextView(this)
         val themeLabelMono = TextView(this)
@@ -1117,11 +1113,12 @@ class MainActivity : AppCompatActivity() {
 
         fun refreshThemeRows() {
             val current = HexSettings.getThemeId(this)
-            val onMono = current != HexTheme.THEME_BIRU_LAUT
+            val onMono = current == HexTheme.THEME_MONO
+            val onBiru = current == HexTheme.THEME_BIRU_LAUT
             themeDotMono.text = if (onMono) "\u25CF" else "\u25CB"
-            themeDotBiru.text = if (!onMono) "\u25CF" else "\u25CB"
+            themeDotBiru.text = if (onBiru) "\u25CF" else "\u25CB"
             themeDotMono.setTextColor(if (onMono) HexTheme.accent else HexTheme.textMuted)
-            themeDotBiru.setTextColor(if (!onMono) HexTheme.accent else HexTheme.textMuted)
+            themeDotBiru.setTextColor(if (onBiru) HexTheme.accent else HexTheme.textMuted)
         }
 
         themeDotMono.textSize = 16f
@@ -1140,7 +1137,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "Tema disimpan. Buka ulang aplikasi untuk menerapkan.", Toast.LENGTH_LONG).show()
             }
         }
-        col.addView(rowMono)
+        themeBox.addView(rowMono)
 
         themeDotBiru.textSize = 16f
         themeDotBiru.setPadding(0, 0, dp(10), 0)
@@ -1158,10 +1155,70 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "Tema disimpan. Buka ulang aplikasi untuk menerapkan.", Toast.LENGTH_LONG).show()
             }
         }
-        col.addView(rowBiru)
+        themeBox.addView(rowBiru)
         refreshThemeRows()
 
-        col.addView(TextView(this).apply {
+        // ---------- THEME_PLUGIN_V1: tema unduhan dari GitHub ----------
+        val pluginList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun renderPluginRows(entries: List<ThemeManager.Entry>) {
+            pluginList.removeAllViews()
+            entries.forEach { e ->
+                val local = ThemeManager.installedVersion(this, e.id)
+                val action = when { local < 0 -> "Unduh"; local < e.version -> "Update"; else -> "Pakai" }
+                val active = HexSettings.getThemeId(this) == e.id
+                pluginList.addView(TextView(this).apply {
+                    text = (if (active) "\u25CF " else "\u25CB ") + e.name + "  [" + action + "]"
+                    setTextColor(if (active) HexTheme.accent else HexTheme.textPrimary)
+                    textSize = 13f
+                    setPadding(0, dp(8), 0, dp(8))
+                    setOnClickListener {
+                        if (local >= e.version) {
+                            HexSettings.setThemeId(this@MainActivity, e.id)
+                            renderPluginRows(entries); refreshThemeRows()
+                            Toast.makeText(this@MainActivity, "Tema disimpan. Buka ulang aplikasi untuk menerapkan.", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(this@MainActivity, "Mengunduh...", Toast.LENGTH_SHORT).show()
+                            Thread {
+                                val err = ThemeManager.download(this@MainActivity, e.id)
+                                runOnUiThread {
+                                    if (err == null) HexSettings.setThemeId(this@MainActivity, e.id)
+                                    Toast.makeText(this@MainActivity, err ?: "Selesai. Buka ulang aplikasi untuk menerapkan.", Toast.LENGTH_LONG).show()
+                                    renderPluginRows(entries); refreshThemeRows()
+                                }
+                            }.start()
+                        }
+                    }
+                    if (local >= 0) setOnLongClickListener {
+                        ThemeManager.delete(this@MainActivity, e.id)
+                        if (HexSettings.getThemeId(this@MainActivity) == e.id)
+                            HexSettings.setThemeId(this@MainActivity, HexTheme.THEME_MONO)
+                        renderPluginRows(ThemeManager.installed(this@MainActivity)); refreshThemeRows()
+                        Toast.makeText(this@MainActivity, "Tema dihapus", Toast.LENGTH_SHORT).show()
+                        true
+                    }
+                })
+            }
+        }
+        renderPluginRows(ThemeManager.installed(this))
+        themeBox.addView(pluginList)
+        themeBox.addView(TextView(this).apply {
+            text = "Muat Tema Online"
+            setTextColor(HexTheme.accent)
+            textSize = 13f
+            setPadding(0, dp(10), 0, dp(10))
+            setOnClickListener {
+                Toast.makeText(this@MainActivity, "Memuat daftar...", Toast.LENGTH_SHORT).show()
+                Thread {
+                    val res = try { ThemeManager.fetchIndex() } catch (ex: Exception) { null }
+                    runOnUiThread {
+                        if (res == null) Toast.makeText(this@MainActivity, "Gagal memuat daftar tema", Toast.LENGTH_LONG).show()
+                        else renderPluginRows(res)
+                    }
+                }.start()
+            }
+        })
+
+        themeBox.addView(TextView(this).apply {
             text = "Perubahan tema terlihat setelah aplikasi dibuka ulang (termasuk bubble & overlay)."
             setTextColor(HexTheme.textMuted)
             textSize = 11f
@@ -1169,11 +1226,9 @@ class MainActivity : AppCompatActivity() {
         })
 
         // ---------- AES_CRYPTO_V1: fondasi enkripsi AES ----------
-        col.addView(sectionTitle("Enkripsi AES (Beta)").apply {
-            setPadding(0, dp(24), 0, dp(8))
-        })
-        col.addView(TextView(this).apply {
-            text = "Passphrase global jadi kunci enkripsi default. Simpan passphrase yang SAMA PERSIS di HP lawan bicara -- kalau beda, dekripsi akan gagal. Kunci per target (ikon gembok di tab Targets) dicoba lebih dulu untuk pesan dari target itu, dan muncul sebagai pilihan saat menekan ENKRIPSI (AES) di panel bubble."
+        val aesBox = collapsibleSection(col, "Enkripsi AES (Beta)")
+        aesBox.addView(TextView(this).apply {
+            text = "Passphrase global jadi kunci enkripsi default. Simpan passphrase yang SAMA PERSIS di HP lawan bicara -- kalau beda, dekripsi akan gagal."
             setTextColor(HexTheme.textSecondary)
             textSize = 12f
             setPadding(0, 0, 0, dp(10))
@@ -1187,11 +1242,11 @@ class MainActivity : AppCompatActivity() {
         aesPassInput.setText(HexSettings.getAesPassphraseGlobal(this))
         aesPassInput.background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
         aesPassInput.setPadding(dp(14), dp(12), dp(14), dp(12))
-        col.addView(aesPassInput, LinearLayout.LayoutParams(
+        aesBox.addView(aesPassInput, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(10) })
 
-        col.addView(secondaryButton("Simpan Passphrase Global") {
+        aesBox.addView(secondaryButton("Simpan Passphrase Global") {
             val p = aesPassInput.text.toString()
             if (p.isBlank()) {
                 Toast.makeText(this, "Passphrase tidak boleh kosong", Toast.LENGTH_SHORT).show()
@@ -1209,7 +1264,7 @@ class MainActivity : AppCompatActivity() {
         aesTestInput.minLines = 2
         aesTestInput.background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
         aesTestInput.setPadding(dp(14), dp(12), dp(14), dp(12))
-        col.addView(aesTestInput, LinearLayout.LayoutParams(
+        aesBox.addView(aesTestInput, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(10) })
 
@@ -1222,7 +1277,7 @@ class MainActivity : AppCompatActivity() {
 
         var lastAesHex = ""
 
-        col.addView(secondaryButton("Enkripsi (tes)") {
+        aesBox.addView(secondaryButton("Enkripsi (tes)") {
             val txt = aesTestInput.text.toString()
             val p = HexSettings.getAesPassphraseGlobal(this)
             if (p.isBlank()) {
@@ -1236,7 +1291,7 @@ class MainActivity : AppCompatActivity() {
             }
         }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(10) })
 
-        col.addView(secondaryButton("Dekripsi (tes, dari hasil di atas)") {
+        aesBox.addView(secondaryButton("Dekripsi (tes, dari hasil di atas)") {
             val p = HexSettings.getAesPassphraseGlobal(this)
             if (lastAesHex.isBlank()) {
                 Toast.makeText(this, "Enkripsi dulu sebelum dekripsi", Toast.LENGTH_SHORT).show()
@@ -1252,14 +1307,12 @@ class MainActivity : AppCompatActivity() {
             }
         }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(8) })
 
-        col.addView(aesResult, LinearLayout.LayoutParams(
+        aesBox.addView(aesResult, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(8) })
 
         // Panel size
-        col.addView(sectionTitle("Ukuran Panel Floating").apply {
-            setPadding(0, dp(24), 0, dp(10))
-        })
+        val panelBox = collapsibleSection(col, "Ukuran Panel Floating")
         val panelRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
@@ -1283,10 +1336,10 @@ class MainActivity : AppCompatActivity() {
             })
         }
         refreshPanelButtons(panelBtns)
-        col.addView(panelRow)
+        panelBox.addView(panelRow)
 
         col.addView(TextView(this).apply {
-            text = "Copyright © Zyn / SIK Dev"
+            text = "Copyright \u00A9 Zyn / SIK Dev"
             setTextColor(HexTheme.textMuted)
             textSize = 11f
             gravity = Gravity.CENTER
@@ -1309,6 +1362,30 @@ class MainActivity : AppCompatActivity() {
                 1
             )
         }
+    }
+
+    private fun showNotifAppPicker(onDone: () -> Unit) {
+        val pm = packageManager
+        val launch = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = pm.queryIntentActivities(launch, 0)
+            .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+            .filter { it.first != packageName }
+            .distinctBy { it.first }
+            .sortedBy { it.second.lowercase() }
+        val current = HexSettings.getNotifPackages(this)
+        val checked = BooleanArray(apps.size) { apps[it].first in current }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Aplikasi yang dipantau")
+            .setMultiChoiceItems(apps.map { it.second }.toTypedArray(), checked) { _, i, on -> checked[i] = on }
+            .setPositiveButton("Simpan") { _, _ ->
+                val listed = apps.map { it.first }.toSet()
+                val result = current.filter { it !in listed }.toMutableSet()
+                apps.forEachIndexed { i, a -> if (checked[i]) result.add(a.first) }
+                HexSettings.setNotifPackages(this, result)
+                onDone()
+            }
+            .setNegativeButton("Batal", null)
+            .show()
     }
 
     private fun settingsRow(title: String, desc: String, onClick: () -> Unit): LinearLayout {
@@ -1421,55 +1498,6 @@ class MainActivity : AppCompatActivity() {
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
 
-    // ---- NOTIF_LOG_APPS_V1: picker aplikasi yang dipantau untuk HEX + Log ----
-
-    private fun appLabelFor(pkg: String): String {
-        return try {
-            val ai = packageManager.getApplicationInfo(pkg, 0)
-            packageManager.getApplicationLabel(ai).toString()
-        } catch (_: Exception) {
-            pkg
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun showAppPickerDialog(onDone: () -> Unit) {
-        val launcherIntent = Intent(Intent.ACTION_MAIN, null).addCategory(Intent.CATEGORY_LAUNCHER)
-        val resolved = try {
-            packageManager.queryIntentActivities(launcherIntent, 0)
-        } catch (_: Exception) {
-            emptyList()
-        }
-
-        val apps = resolved
-            .mapNotNull { it.activityInfo?.packageName }
-            .distinct()
-            .filter { it != packageName }
-            .map { pkg -> pkg to appLabelFor(pkg) }
-            .sortedBy { it.second.lowercase() }
-
-        if (apps.isEmpty()) {
-            Toast.makeText(this, "Tidak ada aplikasi ditemukan", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val current = HexSettings.getNotifPackages(this)
-        val checked = BooleanArray(apps.size) { i -> apps[i].first in current }
-        val labels = apps.map { "${it.second}\n${it.first}" }.toTypedArray()
-
-        AlertDialog.Builder(this)
-            .setTitle("Pilih Aplikasi yang Dipantau")
-            .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
-            .setPositiveButton("Simpan") { _, _ ->
-                val selected = apps.indices.filter { checked[it] }.map { apps[it].first }.toSet()
-                HexSettings.setNotifPackages(this, selected)
-                onDone()
-                Toast.makeText(this, "Aplikasi dipantau disimpan", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("Batal", null)
-            .show()
-    }
-
     private fun rounded(color: Int, radius: Float, strokeColor: Int = 0, strokeWidth: Int = 0): GradientDrawable {
         return GradientDrawable().apply {
             setColor(color)
@@ -1490,6 +1518,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun collapsibleSection(parent: LinearLayout, title: String, expanded: Boolean = false, topMarginDp: Int = 24): LinearLayout {
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(topMarginDp), 0, dp(10))
+        }
+        val titleTv = TextView(this).apply {
+            text = title
+            setTextColor(HexTheme.textSecondary)
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            letterSpacing = 0.06f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val arrowTv = TextView(this).apply {
+            text = if (expanded) "\u25B4" else "\u25BE"
+            setTextColor(HexTheme.textMuted)
+            textSize = 14f
+        }
+        header.addView(titleTv)
+        header.addView(arrowTv)
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (expanded) android.view.View.VISIBLE else android.view.View.GONE
+        }
+
+        header.setOnClickListener {
+            val show = content.visibility != android.view.View.VISIBLE
+            content.visibility = if (show) android.view.View.VISIBLE else android.view.View.GONE
+            arrowTv.text = if (show) "\u25B4" else "\u25BE"
+        }
+
+        parent.addView(header)
+        parent.addView(content)
+        return content
+    }
     private fun sectionTitle(text: String): TextView {
         return TextView(this).apply {
             this.text = text
@@ -1577,13 +1642,41 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Floating Bubble diaktifkan", Toast.LENGTH_SHORT).show()
             refreshStatusCards()
         } else {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
-            startActivity(intent)
-            Toast.makeText(this, "Berikan izin Overlay dulu", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this,
+                "Aktifkan \"Tampil di atas aplikasi lain\" untuk HEXTOOL, lalu kembali",
+                Toast.LENGTH_LONG
+            ).show()
+            openOverlayPermission(startBubbleAfterGrant = true)
         }
+    }
+
+    // Bubble otomatis dinyalakan begitu pengguna kembali dengan izin sudah diberikan.
+    private var pendingBubbleStart = false
+
+    // Halaman izin overlay khusus HEXTOOL. Fallback bertingkat untuk ROM (MIUI dll.)
+    // yang tidak mengenali intent standar atau mengabaikan URI paketnya.
+    private fun openOverlayPermission(startBubbleAfterGrant: Boolean) {
+        pendingBubbleStart = startBubbleAfterGrant
+        val attempts = listOf(
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")),
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+        )
+        for (i in attempts) {
+            try {
+                startActivity(i)
+                return
+            } catch (_: Exception) {
+                // coba cara berikutnya
+            }
+        }
+        pendingBubbleStart = false
+        Toast.makeText(
+            this,
+            "Buka Pengaturan > Aplikasi > HEXTOOL > Tampil di atas aplikasi lain",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     private fun openPermissionSettings() {
@@ -1599,12 +1692,7 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             }
             .setNeutralButton("Overlay") { _, _ ->
-                startActivity(
-                    Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                )
+                openOverlayPermission(startBubbleAfterGrant = false)
             }
             .setNegativeButton("Aksesibilitas") { _, _ ->
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -1679,22 +1767,21 @@ class MainActivity : AppCompatActivity() {
             }
             val report = LinkSafetyChecker.check(raw)
             val levelColor = when (report.level) {
-                LinkSafetyChecker.Level.AMAN -> HexTheme.success
+                LinkSafetyChecker.Level.AMAN -> if (report.trusted) HexTheme.success else HexTheme.textPrimary
                 LinkSafetyChecker.Level.HATI_HATI -> HexTheme.warning
                 LinkSafetyChecker.Level.MENCURIGAKAN -> HexTheme.danger
             }
-            val levelLabel = when (report.level) {
-                LinkSafetyChecker.Level.AMAN -> "AMAN"
-                LinkSafetyChecker.Level.HATI_HATI -> "PERLU HATI-HATI"
-                LinkSafetyChecker.Level.MENCURIGAKAN -> "MENCURIGAKAN"
-            }
+            val levelLabel = linkLevelLabel(report)
             val sb = StringBuilder()
             sb.append("Hasil: $levelLabel  (skor ${report.score})\n")
+            if (report.urlCount > 1) sb.append("Tautan ditemukan: ${report.urlCount}\n")
             if (report.host.isNotBlank()) sb.append("Host: ${report.host}\n")
             if (report.scheme.isNotBlank()) sb.append("Skema: ${report.scheme}\n")
             sb.append("\nAlasan:\n")
             report.reasons.forEach { sb.append("• $it\n") }
-            sb.append("\nCatatan: ini heuristik lokal, bukan vonis keamanan absolut.")
+            sb.append("\nSaran: ").append(linkAdvice(report))
+            sb.append("\n\nCatatan: pemeriksaan lokal berbasis pola phishing yang beredar; tidak melihat umur domain " +
+                "atau isi halaman, jadi bukan jaminan aman mutlak.")
             resultView.text = sb.toString()
             resultView.setTextColor(levelColor)
         }
@@ -1768,6 +1855,24 @@ class MainActivity : AppCompatActivity() {
         if (fromClipboard && input.text.isNotEmpty()) runCheck()
     }
 
+    private fun linkLevelLabel(r: LinkSafetyChecker.Report): String = when (r.level) {
+        LinkSafetyChecker.Level.AMAN ->
+            if (r.trusted) "TIDAK ADA SINYAL RISIKO (domain resmi dikenal)"
+            else "BELUM ADA SINYAL RISIKO (domain tidak dikenal, bukan jaminan aman)"
+        LinkSafetyChecker.Level.HATI_HATI -> "PERLU HATI-HATI"
+        LinkSafetyChecker.Level.MENCURIGAKAN -> "MENCURIGAKAN — JANGAN DIBUKA"
+    }
+
+    private fun linkAdvice(r: LinkSafetyChecker.Report): String = when (r.level) {
+        LinkSafetyChecker.Level.MENCURIGAKAN ->
+            "jangan dibuka, jangan isi data/OTP/PIN, jangan pasang berkas apa pun. Hapus pesan, dan laporkan bila meniru instansi/bank " +
+                "(cekrekening.id, aduannomor.id, atau layanan resmi merek terkait)."
+        LinkSafetyChecker.Level.HATI_HATI ->
+            "jangan masukkan data sensitif. Buka situs resminya langsung dengan mengetik alamat sendiri / lewat aplikasi resmi, bukan dari tautan ini."
+        LinkSafetyChecker.Level.AMAN ->
+            "tetap cek ejaan alamat, dan jangan pernah membagikan OTP/PIN/password meski halamannya tampak meyakinkan."
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
@@ -1782,11 +1887,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Hasil QR disalin. Buka checker lagi atau tempel manual.", Toast.LENGTH_LONG).show()
                 // Langsung cek
                 val report = LinkSafetyChecker.check(contents)
-                val level = when (report.level) {
-                    LinkSafetyChecker.Level.AMAN -> "AMAN"
-                    LinkSafetyChecker.Level.HATI_HATI -> "HATI-HATI"
-                    LinkSafetyChecker.Level.MENCURIGAKAN -> "MENCURIGAKAN"
-                }
+                val level = linkLevelLabel(report)
                 AlertDialog.Builder(this)
                     .setTitle("Hasil QR: $level")
                     .setMessage(
@@ -1797,5 +1898,262 @@ class MainActivity : AppCompatActivity() {
                     .show()
             }
         }
+    }
+
+    // ========================================================================
+    // SYNCHRONIZED UI FUNCTIONS & ALL OVERLOADS
+    // ========================================================================
+
+    private fun createCardBackground(): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(HexTheme.surface)
+            cornerRadius = dp(16).toFloat()
+        }
+    }
+
+    private fun createDotDrawable(color: Int): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+        }
+    }
+
+    // --- setCardAccent Overloads ---
+    private fun setCardAccent(card: LinearLayout, color: Int) {
+        val header = card.getChildAt(0) as? LinearLayout
+        val dot = header?.getChildAt(0)
+        (dot?.background as? GradientDrawable)?.setColor(color)
+    }
+
+    private fun setCardAccent(card: LinearLayout, value: String, sub: String, color: Int) {
+        setCardAccent(card, color)
+        (card.getChildAt(1) as? TextView)?.text = value
+        (card.getChildAt(2) as? TextView)?.text = sub
+    }
+
+    private fun setCardAccent(card: LinearLayout, color: Int, value: String, sub: String) {
+        setCardAccent(card, value, sub, color)
+    }
+
+    private fun setCardAccent(card: LinearLayout, value: String, color: Int) {
+        setCardAccent(card, value, "", color)
+    }
+
+    // --- statusCard Overloads ---
+    private fun statusCard(
+        title: String,
+        accentColor: Int,
+        initialValue: String,
+        initialSub: String,
+        onClick: (() -> Unit)?
+    ): LinearLayout {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            background = createCardBackground()
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(4), dp(4), dp(4), dp(4))
+            }
+            onClick?.let { cb -> setOnClickListener { cb() } }
+        }
+
+        val headerLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val statusDot = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(6) }
+            background = createDotDrawable(accentColor)
+        }
+
+        val titleTv = TextView(this).apply {
+            text = title
+            textSize = 12f
+            setTextColor(HexTheme.textSecondary)
+        }
+
+        headerLayout.addView(statusDot)
+        headerLayout.addView(titleTv)
+
+        val valueTv = TextView(this).apply {
+            text = initialValue
+            textSize = 14f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            setPadding(0, dp(4), 0, 0)
+            tag = "value"
+        }
+
+        val subTv = TextView(this).apply {
+            tag = "subtitle" // dicari oleh setCardSubtitle()
+            text = initialSub
+            textSize = 10f
+            setTextColor(HexTheme.textMuted)
+        }
+
+        card.addView(headerLayout)
+        card.addView(valueTv)
+        card.addView(subTv)
+        return card
+    }
+
+    private fun statusCard(title: String, accentColor: Int, initialValue: String, initialSub: String): LinearLayout {
+        return statusCard(title, accentColor, initialValue, initialSub, null)
+    }
+
+    private fun statusCard(title: String, initialValue: String, initialSub: String, accentColor: Int): LinearLayout {
+        return statusCard(title, accentColor, initialValue, initialSub, null)
+    }
+
+    private fun statusCard(title: String, initialValue: String, initialSub: String): LinearLayout {
+        return statusCard(title, HexTheme.accent, initialValue, initialSub, null)
+    }
+
+    // --- featureRow ---
+    private fun featureRow(
+        iconRes: Int,
+        title: String,
+        desc: String,
+        onClick: () -> Unit
+    ): LinearLayout {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(dp(14), dp(12), dp(14), dp(12))
+        row.background = GradientDrawable().apply {
+            setColor(HexTheme.panelBg)
+            cornerRadius = dp(16).toFloat()
+            setStroke(dp(1), HexTheme.accentDim)
+        }
+        row.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(0, 0, 0, dp(8)) }
+        row.setOnClickListener { onClick() }
+
+        val iconContainer = FrameLayout(this)
+        iconContainer.layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+        iconContainer.background = GradientDrawable().apply {
+            setColor(HexTheme.panelBgAlt)
+            cornerRadius = dp(10).toFloat()
+        }
+        val iv = ImageView(this)
+        iv.setImageResource(iconRes)
+        iv.setColorFilter(Color.WHITE)
+        iv.layoutParams = FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER)
+        iconContainer.addView(iv)
+
+        val textLayout = LinearLayout(this)
+        textLayout.orientation = LinearLayout.VERTICAL
+        textLayout.setPadding(dp(12), 0, dp(12), 0)
+        textLayout.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+
+        val tvTitle = TextView(this).apply {
+            text = title
+            textSize = 14f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        }
+        val tvDesc = TextView(this).apply {
+            text = desc
+            textSize = 12f
+            setTextColor(HexTheme.textSecondary)
+        }
+        textLayout.addView(tvTitle)
+        textLayout.addView(tvDesc)
+
+        val arrowTv = TextView(this).apply {
+            text = ">"
+            textSize = 18f
+            setTextColor(HexTheme.textMuted)
+        }
+
+        row.addView(iconContainer)
+        row.addView(textLayout)
+        row.addView(arrowTv)
+        return row
+    }
+
+    private fun showPrePermissionDialog(
+        title: String,
+        explanation: String,
+        onProceed: () -> Unit
+    ) {
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(title)
+            .setMessage(explanation)
+            .setPositiveButton("Buka Pengaturan") { _, _ -> onProceed() }
+            .setNegativeButton("Batal", null)
+            .create()
+        dialog.window?.decorView?.filterTouchesWhenObscured = true
+        dialog.show()
+    }
+
+    // --- Overload tambahan: statusCard(title, value, accent) ---
+    private fun statusCard(title: String, initialValue: String, accentColor: Int): LinearLayout {
+        return statusCard(title, accentColor, initialValue, "", null)
+    }
+
+    // --- Overload tambahan: featureRow dengan ikon emoji/teks ---
+    private fun featureRow(
+        icon: String,
+        title: String,
+        desc: String,
+        onClick: () -> Unit
+    ): LinearLayout {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(dp(14), dp(12), dp(14), dp(12))
+        row.background = GradientDrawable().apply {
+            setColor(HexTheme.panelBg)
+            cornerRadius = dp(16).toFloat()
+            setStroke(dp(1), HexTheme.accentDim)
+        }
+        row.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(0, 0, 0, dp(8)) }
+        row.setOnClickListener { onClick() }
+
+        val iconTv = TextView(this).apply {
+            text = icon
+            textSize = 18f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+            background = GradientDrawable().apply {
+                setColor(HexTheme.panelBgAlt)
+                cornerRadius = dp(10).toFloat()
+            }
+        }
+
+        val textLayout = LinearLayout(this)
+        textLayout.orientation = LinearLayout.VERTICAL
+        textLayout.setPadding(dp(12), 0, dp(12), 0)
+        textLayout.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        textLayout.addView(TextView(this).apply {
+            text = title
+            textSize = 14f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        })
+        textLayout.addView(TextView(this).apply {
+            text = desc
+            textSize = 12f
+            setTextColor(HexTheme.textSecondary)
+        })
+
+        val arrowTv = TextView(this).apply {
+            text = ">"
+            textSize = 18f
+            setTextColor(HexTheme.textMuted)
+        }
+
+        row.addView(iconTv)
+        row.addView(textLayout)
+        row.addView(arrowTv)
+        return row
     }
 }

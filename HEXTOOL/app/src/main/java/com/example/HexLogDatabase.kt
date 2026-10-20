@@ -8,7 +8,20 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-data class TargetModel(val name: String, val identifier: String, val aesKey: String? = null) // AES_TARGET_KEY_V1
+// TARGETS_V2: "disabled" (bukan "enabled") supaya data lama tanpa field ini otomatis dianggap aktif.
+data class TargetModel(
+    val name: String,
+    val identifier: String,
+    val aesKey: String? = null, // AES_TARGET_KEY_V1
+    val disabled: Boolean = false
+) {
+    fun isEnabled(): Boolean = !disabled
+
+    // Cocok dengan nama pengirim/grup (sebagian teks, tanpa peduli huruf besar-kecil).
+    fun matches(text: String): Boolean =
+        (name.isNotBlank() && text.contains(name, ignoreCase = true)) ||
+            (identifier.isNotBlank() && text.contains(identifier, ignoreCase = true))
+}
 data class LogModel(val timestamp: String, val sender: String, val message: String)
 
 object HexLogDatabase {
@@ -64,6 +77,27 @@ object HexLogDatabase {
             targets.removeAt(index)
             writeTargets(context, targets)
         }
+    }
+
+    @Synchronized
+    fun setTargetEnabled(context: Context, index: Int, enabled: Boolean) {
+        val targets = getTargets(context)
+        if (index in targets.indices) {
+            targets[index] = targets[index].copy(disabled = !enabled)
+            writeTargets(context, targets)
+        }
+    }
+
+    // TARGETS_V2: true jika pengirim cocok dengan target yang dimatikan
+    // dan tidak cocok dengan target aktif mana pun -> notifikasinya diabaikan.
+    fun isSenderIgnored(context: Context, vararg names: String): Boolean {
+        val targets = getTargets(context)
+        if (targets.none { !it.isEnabled() }) return false
+        val hay = names.filter { it.isNotBlank() }
+        if (hay.isEmpty()) return false
+        val matchesEnabled = targets.any { t -> t.isEnabled() && hay.any { t.matches(it) } }
+        if (matchesEnabled) return false
+        return targets.any { t -> !t.isEnabled() && hay.any { t.matches(it) } }
     }
 
     // ---------------- Log ----------------

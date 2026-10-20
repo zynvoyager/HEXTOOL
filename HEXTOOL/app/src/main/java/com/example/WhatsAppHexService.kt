@@ -209,6 +209,15 @@ class WhatsAppHexService : NotificationListenerService() {
         var label = sender
         var finalText = raw
 
+        // TARGETS_V2: target yang dimatikan di tab Targets tidak dicatat / didekode.
+        val memberName = candidates.first().member.ifBlank {
+            raw.substringBefore(": ", "")
+        }
+        if (HexLogDatabase.isSenderIgnored(this, sender, memberName)) {
+            saveDebug(this, "$sender: target dimatikan, diabaikan")
+            return
+        }
+
         val sep = raw.indexOf(": ")
         if (sep > 0) {
             val maybeMember = raw.substring(0, sep).trim()

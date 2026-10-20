@@ -103,15 +103,13 @@ object AesCipher {
     }
 
     // AES_KEYS_V1: kunci per target.
-    private fun targetMatches(t: TargetModel, text: String): Boolean =
-        (t.name.isNotBlank() && text.contains(t.name, ignoreCase = true)) ||
-            (t.identifier.isNotBlank() && text.contains(t.identifier, ignoreCase = true))
+    private fun targetMatches(t: TargetModel, text: String): Boolean = t.matches(text)
 
     // Kandidat passphrase untuk MENDEKRIPSI. Urutan: kunci target yang cocok dengan pengirim
     // (jika diketahui), passphrase global, lalu kunci target lain. Tanpa duplikat, maksimal 8.
     fun candidateKeys(context: Context, senderHint: String = ""): List<String> {
         val out = LinkedHashSet<String>()
-        val targets = HexLogDatabase.getTargets(context)
+        val targets = HexLogDatabase.getTargets(context).filter { it.isEnabled() } // TARGETS_V2
 
         if (senderHint.isNotBlank()) {
             for (t in targets) {
@@ -135,7 +133,7 @@ object AesCipher {
         val out = ArrayList<Pair<String, String>>()
         val global = HexSettings.getAesPassphraseGlobal(context)
         if (global.isNotBlank()) out.add(Pair("Passphrase global", global))
-        for (t in HexLogDatabase.getTargets(context)) {
+        for (t in HexLogDatabase.getTargets(context).filter { it.isEnabled() }) {
             val k = t.aesKey
             if (!k.isNullOrBlank()) out.add(Pair("Target: " + t.name, k))
         }

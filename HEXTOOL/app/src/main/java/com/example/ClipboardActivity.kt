@@ -152,13 +152,17 @@ class ClipboardActivity : Activity() {
                 }
             }
 
-            else -> when (val r = HexConverter.convert(input)) {
+            // ENCODE_PLAIN_V1: prefix 3301 ditambahkan otomatis kalau belum ada,
+            // jadi cukup ketik teks biasa lalu tekan ENCODE.
+            else -> when (val r = HexConverter.convert(
+                if (input.startsWith(HexConverter.PREFIX)) input else HexConverter.PREFIX + input
+            )) {
                 is HexConverter.Result.Success -> r.hex
                 is HexConverter.Result.NoPrefix -> {
-                    toast("Teks harus diawali 3301"); return
+                    toast("Teks tidak valid"); return
                 }
                 is HexConverter.Result.EmptyPayload -> {
-                    toast("Teks setelah prefix 3301 kosong"); return
+                    toast("Teks kosong"); return
                 }
             }
         }

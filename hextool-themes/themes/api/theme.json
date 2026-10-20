@@ -1,0 +1,23 @@
+{
+  "id": "api",
+  "name": "Api",
+  "version": 1,
+  "colors": {
+    "bg": "#0F0A08",
+    "panelBg": "#1A110D",
+    "panelBgAlt": "#211611",
+    "surface": "#2A1B14",
+    "accent": "#FF5722",
+    "accentSoft": "#FF8A65",
+    "accentDim": "#5D2A1A",
+    "accentGlow": "#2A130B",
+    "textPrimary": "#FFFFFF",
+    "textSecondary": "#C9B3A8",
+    "textMuted": "#7A6459"
+  },
+  "images": {
+    "background": "bg.jpg",
+    "mascot": "mascot.png",
+    "splash": "splash.png"
+  }
+}

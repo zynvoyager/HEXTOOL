@@ -1,0 +1,23 @@
+{
+  "id": "ungu",
+  "name": "Ungu Malam",
+  "version": 1,
+  "colors": {
+    "bg": "#0C0814",
+    "panelBg": "#150F22",
+    "panelBgAlt": "#1B142B",
+    "surface": "#241A38",
+    "accent": "#9575FF",
+    "accentSoft": "#C5B3FF",
+    "accentDim": "#3F2F7A",
+    "accentGlow": "#1E1540",
+    "textPrimary": "#F3EEFF",
+    "textSecondary": "#B1A5D0",
+    "textMuted": "#6F6590"
+  },
+  "images": {
+    "background": "bg.jpg",
+    "mascot": "mascot.png",
+    "splash": "splash.png"
+  }
+}

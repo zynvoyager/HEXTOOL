@@ -1,0 +1,23 @@
+{
+  "id": "samudra",
+  "name": "Samudra",
+  "version": 1,
+  "colors": {
+    "bg": "#06121A",
+    "panelBg": "#0B1C27",
+    "panelBgAlt": "#0F2431",
+    "surface": "#13303F",
+    "accent": "#00BCD4",
+    "accentSoft": "#80DEEA",
+    "accentDim": "#0E4F5C",
+    "accentGlow": "#072B33",
+    "textPrimary": "#E6FAFD",
+    "textSecondary": "#8FB8C2",
+    "textMuted": "#58808A"
+  },
+  "images": {
+    "background": "bg.jpg",
+    "mascot": "mascot.png",
+    "splash": "splash.png"
+  }
+}

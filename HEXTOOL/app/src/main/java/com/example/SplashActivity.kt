@@ -30,18 +30,18 @@ class SplashActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         HexTheme.load(this) // THEME_TOGGLE_V1
 
-        window.statusBarColor = Color.BLACK
-        window.navigationBarColor = Color.BLACK
+        window.statusBarColor = HexTheme.bg
+        window.navigationBarColor = HexTheme.bg
 
         val root = FrameLayout(this).apply {
-            setBackgroundColor(Color.BLACK)
+            setBackgroundColor(HexTheme.bg)
             setOnClickListener { openMain() }
         }
 
         // Wallpaper kontur + lapisan gelap tipis
         root.addView(
             ImageView(this).apply {
-                setImageResource(R.drawable.bg_topo)
+                HexTheme.setImage(this, "background", R.drawable.bg_topo)
                 scaleType = ImageView.ScaleType.CENTER_CROP
             },
             FrameLayout.LayoutParams(
@@ -65,7 +65,7 @@ class SplashActivity : AppCompatActivity() {
 
         column.addView(
             ImageView(this).apply {
-                setImageResource(R.drawable.hex_dragon)
+                HexTheme.setImage(this, "splash", R.drawable.cat_splash)
                 scaleType = ImageView.ScaleType.FIT_CENTER
             },
             LinearLayout.LayoutParams(dp(240), dp(240))
@@ -89,7 +89,7 @@ class SplashActivity : AppCompatActivity() {
         column.addView(
             TextView(this).apply {
                 text = "Simple Tools. Greater Control."
-                setTextColor(Color.rgb(150, 170, 185))
+                setTextColor(HexTheme.textSecondary)
                 textSize = 13f
                 gravity = Gravity.CENTER
                 setPadding(0, dp(6), 0, 0)
@@ -101,7 +101,7 @@ class SplashActivity : AppCompatActivity() {
         )
 
         val track = FrameLayout(this).apply {
-            setBackgroundColor(Color.argb(80, 63, 167, 214))
+            setBackgroundColor((HexTheme.accent and 0x00FFFFFF) or (80 shl 24))
         }
         val fill = View(this).apply {
             setBackgroundColor(HexTheme.accent)
@@ -133,7 +133,7 @@ class SplashActivity : AppCompatActivity() {
         root.addView(
             TextView(this).apply {
                 text = "Copyright © Zyn / SIK Dev"
-                setTextColor(Color.rgb(120, 135, 148))
+                setTextColor(HexTheme.textMuted)
                 textSize = 11f
                 gravity = Gravity.CENTER
             },

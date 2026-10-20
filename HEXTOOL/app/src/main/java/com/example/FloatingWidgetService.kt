@@ -38,6 +38,9 @@ class FloatingWidgetService : Service() {
         private const val LONG_PRESS_MS = 600L
         private const val REFRESH_INTERVAL_MS = 1200L
 
+        // Dibaca MainActivity untuk kartu status "Floating".
+        @Volatile var running = false
+
         // Indeks 0 = S, 1 = M, 2 = L
         private val SIZE_NAMES = arrayOf("S", "M", "L")
         private val WIDTH_FRACTION = floatArrayOf(0.72f, 0.86f, 0.95f)
@@ -118,13 +121,30 @@ class FloatingWidgetService : Service() {
         super.onCreate()
         HexTheme.load(this) // THEME_TOGGLE_V1
 
+        // Tanpa izin overlay addView() melempar BadTokenException (crash). Hentikan dengan sopan.
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(
+                this,
+                "Izin overlay belum diberikan. Buka HEXTOOL > Pengaturan > Overlay.",
+                Toast.LENGTH_LONG
+            ).show()
+            stopSelf()
+            return
+        }
+        running = true
+
         windowManager =
             getSystemService(WINDOW_SERVICE) as WindowManager
 
-        floatingView = LayoutInflater.from(this).inflate(
-            R.layout.floating_widget_layout,
-            null
-        )
+        floatingView = try {
+            LayoutInflater.from(this).inflate(R.layout.floating_widget_layout, null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal membuat tampilan bubble", e)
+            Toast.makeText(this, "Bubble gagal dibuat: ${e.message}", Toast.LENGTH_LONG).show()
+            running = false
+            stopSelf()
+            return
+        }
 
         val bubblePx = dp(HexSettings.getBubbleDp(this))
 
@@ -142,8 +162,24 @@ class FloatingWidgetService : Service() {
 
         // BUBBLE_ICON_CHECK
         val iconView = floatingView.findViewById<android.widget.ImageView>(R.id.bubbleIcon)
+        // THEME_PLUGIN_V2: ikon + latar bubble ikut tema
+        iconView?.let { HexTheme.setImage(it, "mascot", R.drawable.cat_hex) }
+        floatingView.findViewById<android.view.View>(R.id.bubbleCircle)?.background =
+            android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(HexTheme.panelBg)
+                setStroke(2, HexTheme.accentDim)
+            }
         Log.d(TAG, "Ikon bubble: drawable=${iconView?.drawable}")
-        windowManager.addView(floatingView, bubbleParams)
+        try {
+            windowManager.addView(floatingView, bubbleParams)
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal menampilkan bubble", e)
+            Toast.makeText(this, "Bubble gagal tampil: ${e.message}", Toast.LENGTH_LONG).show()
+            running = false
+            stopSelf()
+            return
+        }
         bubbleAdded = true
         applyBubbleSize()
 
@@ -163,7 +199,7 @@ class FloatingWidgetService : Service() {
                     if (!moved) {
                         longPressed = true
                         hideMenu()
-                        toggleScreenOverlay()
+                        toggleScreenOverlay(openSettings = false)
                     }
                 }
 
@@ -177,6 +213,7 @@ class FloatingWidgetService : Service() {
                             startY = bubbleParams.y
                             touchX = event.rawX
                             touchY = event.rawY
+                            bubbleTouching = true
                             moved = false
                             longPressed = false
                             handler.postDelayed(longPress, LONG_PRESS_MS)
@@ -193,7 +230,6 @@ class FloatingWidgetService : Service() {
                             }
 
                             if (moved) {
-                                hideMenu()
                                 bubbleParams.x = startX + dx.toInt()
                                 bubbleParams.y = startY + dy.toInt()
 
@@ -201,18 +237,23 @@ class FloatingWidgetService : Service() {
                                     floatingView,
                                     bubbleParams
                                 )
+                                updateMenuPosition()
                             }
                             return true
                         }
 
                         MotionEvent.ACTION_UP -> {
                             handler.removeCallbacks(longPress)
+                            bubbleTouching = false
                             if (!moved && !longPressed) toggleMenu()
+                            // Selesai geser: susun ulang menu agar muat di posisi baru.
+                            if (moved) settleMenu()
                             return true
                         }
 
                         MotionEvent.ACTION_CANCEL -> {
                             handler.removeCallbacks(longPress)
+                            bubbleTouching = false
                             return true
                         }
                     }
@@ -233,10 +274,15 @@ class FloatingWidgetService : Service() {
         bubbleParams.width = px
         bubbleParams.height = px
 
-        // Anak pertama pada layout bubble adalah TextView "HEX".
-        val label = (floatingView as? ViewGroup)?.getChildAt(0)
-        if (label is TextView) {
-            label.textSize = sizeDp * 0.25f
+        // Ikon ikut skala ukuran bubble (sekitar 50%).
+        floatingView.findViewById<android.widget.ImageView>(R.id.bubbleIcon)?.let { icon ->
+            val iconPx = (px * 0.5f).toInt()
+            val lp = icon.layoutParams
+            if (lp != null && (lp.width != iconPx || lp.height != iconPx)) {
+                lp.width = iconPx
+                lp.height = iconPx
+                icon.layoutParams = lp
+            }
         }
 
         if (bubbleAdded) {
@@ -322,7 +368,7 @@ class FloatingWidgetService : Service() {
         root.addView(heading)
 
         val input = EditText(this).apply {
-            hint = "3301... atau kode HEX"
+            hint = "ketik teks untuk di-encode, atau tempel kode HEX"
             setHintTextColor(Color.GRAY)
             setTextColor(HexTheme.accent)
             textSize = INPUT_SP[s]
@@ -358,16 +404,16 @@ class FloatingWidgetService : Service() {
             ).apply { bottomMargin = dp(4) }
         )
 
-        // Teks 3301... -> HEX
+        // Teks biasa -> HEX (prefix 3301 otomatis), hasil langsung disalin
         root.addView(
             makeRow(
-                makeButton("CONVERT", HexTheme.accent) {
+                makeButton("ENCODE", HexTheme.accent) {
                     startClipboardActivity(
                         ClipboardActivity.MODE_ENCODE,
                         input.text.toString()
                     )
                 },
-                makeButton("PASTE & CONVERT", HexTheme.accent) {
+                makeButton("PASTE & ENCODE", HexTheme.accent) {
                     startClipboardActivity(ClipboardActivity.MODE_ENCODE, null)
                 },
                 0
@@ -462,11 +508,11 @@ class FloatingWidgetService : Service() {
 
     // ---------------- Terjemah layar (overlay menimpa HEX) ----------------
 
-    private fun toggleScreenOverlay() {
-        if (overlayActive) stopOverlay(true) else startOverlay()
+    private fun toggleScreenOverlay(openSettings: Boolean = true) {
+        if (overlayActive) stopOverlay(true) else startOverlay(openSettings)
     }
 
-    private fun startOverlay() {
+    private fun startOverlay(openSettings: Boolean = true) {
         if (langOverlayActive) stopLanguageOverlay(false)
         if (HexClipboardService.instance == null) {
             // TAHAP_A11Y_CHECK: bedakan "belum diaktifkan" vs "aktif tapi belum tersambung"
@@ -480,13 +526,17 @@ class FloatingWidgetService : Service() {
                 msg,
                 Toast.LENGTH_LONG
             ).show()
-            try {
-                startActivity(
-                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "Gagal membuka pengaturan aksesibilitas: ${e.message}")
+            // Tahan bubble tidak boleh melempar pengguna keluar dari aplikasi;
+            // pengaturan hanya dibuka bila dipilih lewat menu.
+            if (openSettings) {
+                try {
+                    startActivity(
+                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Gagal membuka pengaturan aksesibilitas: ${e.message}")
+                }
             }
             return
         }
@@ -835,7 +885,7 @@ class FloatingWidgetService : Service() {
 
     private fun toggleMenu() {
         if (menuView != null) {
-            hideMenu()
+            hideMenuAnimated()
         } else if (panelView == null) {
             // Ketuk bubble saat menu terbuka memicu ACTION_OUTSIDE (menu tertutup)
             // lalu ACTION_UP di sini; abaikan agar menu tidak langsung terbuka lagi.
@@ -844,110 +894,385 @@ class FloatingWidgetService : Service() {
         }
     }
 
-    private fun showMenu() {
-        if (menuView != null) return
+    // ---------------- RADIAL_MENU_V1: menu melingkar mengelilingi bubble ----------------
+    private class MenuEntry(
+        val icon: String,
+        val label: String,
+        val active: Boolean,
+        val action: () -> Unit
+    )
 
-        val items: List<Pair<String, () -> Unit>> = listOf(
-            "Panel" to { showPanel() },
-            (if (overlayActive) "Terjemahkan (NYALA)" else "Terjemahkan") to { toggleScreenOverlay() },
-            "Target" to { openMainActivity() },
-            "Log" to { openMainActivity() },
-            (if (langOverlayActive) "Terjemah Bahasa (NYALA)" else "Terjemah Bahasa") to { toggleLanguageOverlay() },
-            "Pengaturan" to { openMainActivity() },
-            "Tutup bubble" to { stopSelf() }
+    private class MenuSlot(
+        val view: View,
+        val params: WindowManager.LayoutParams,
+        var dx: Float, // offset saat ini dari pusat bubble
+        var dy: Float,
+        var tx: Float, // offset tujuan
+        var ty: Float
+    )
+
+    private val menuSlots = ArrayList<MenuSlot>()
+    private var menuAnim: android.animation.ValueAnimator? = null
+    private var menuClosing = false
+    private var bubbleTouching = false
+    private var itemTouching = false
+
+    // Sentuhan di luar menu menutup menu, kecuali sentuhan itu pada bubble / item menu.
+    private val outsideCloseRunnable = Runnable {
+        if (!bubbleTouching && !itemTouching) {
+            lastOutsideCloseMs = android.os.SystemClock.uptimeMillis()
+            hideMenuAnimated()
+        }
+    }
+
+    private fun bubbleCenterX() = bubbleParams.x + bubbleParams.width / 2
+    private fun bubbleCenterY() = bubbleParams.y + bubbleParams.height / 2
+
+    // Hitung posisi tiap item (offset dari pusat bubble). Pakai busur terpanjang yang
+    // masih muat di layar; kalau terlalu sempit (dekat tepi/pojok) pakai dua lingkaran.
+    private fun computeMenuOffsets(n: Int, cx: Int, cy: Int, r1: Int): List<IntArray> {
+        val dm = resources.displayMetrics
+        val w = dm.widthPixels
+        val h = dm.heightPixels
+        val hw = dp(26)
+        val hh = dp(29)
+        val mg = dp(6)
+        val minChord = dp(54).toDouble()
+
+        fun valid(x: Double, y: Double) =
+            x >= hw + mg && x <= w - hw - mg && y >= hh + mg && y <= h - hh - mg
+
+        fun bestArc(r: Int): Pair<Double, Double> {
+            val ok = BooleanArray(360) { a ->
+                val rad = Math.toRadians(a.toDouble())
+                valid(cx + r * Math.cos(rad), cy + r * Math.sin(rad))
+            }
+            val first = ok.indexOfFirst { !it }
+            if (first < 0) return Pair(-90.0, 360.0)
+            var bestStart = 0
+            var bestLen = 0
+            var start = 0
+            var len = 0
+            for (k in 1..360) {
+                val idx = (first + k) % 360
+                if (ok[idx]) {
+                    if (len == 0) start = idx
+                    len++
+                    if (len > bestLen) {
+                        bestLen = len
+                        bestStart = start
+                    }
+                } else {
+                    len = 0
+                }
+            }
+            return Pair(bestStart.toDouble(), maxOf(bestLen - 1, 0).toDouble())
+        }
+
+        fun angles(r: Int, count: Int): List<Double> {
+            val (start, len) = bestArc(r)
+            return when {
+                count <= 0 -> emptyList()
+                len >= 360.0 -> List(count) { start + 360.0 * it / count }
+                count == 1 -> listOf(start + len / 2)
+                else -> List(count) { start + len * it / (count - 1) }
+            }
+        }
+
+        fun chord(r: Int, count: Int): Double {
+            val (_, len) = bestArc(r)
+            if (len >= 360.0) return 2 * r * Math.sin(Math.PI / count)
+            if (count <= 1) return Double.MAX_VALUE
+            return 2 * r * Math.sin(Math.toRadians(len / (count - 1) / 2))
+        }
+
+        val out = ArrayList<IntArray>()
+        fun add(r: Int, a: Double) {
+            val rad = Math.toRadians(a)
+            out.add(intArrayOf((r * Math.cos(rad)).toInt(), (r * Math.sin(rad)).toInt()))
+        }
+
+        if (chord(r1, n) >= minChord) {
+            angles(r1, n).forEach { add(r1, it) }
+        } else {
+            val r2 = r1 + dp(62)
+            val n1 = n / 2
+            val n2 = n - n1
+            val a1 = angles(r1, n1)
+            val a2 = angles(r2, n2)
+            for (i in 0 until maxOf(a1.size, a2.size)) {
+                if (i < a2.size) add(r2, a2[i])
+                if (i < a1.size) add(r1, a1[i])
+            }
+        }
+        return out
+    }
+
+    private fun makeMenuItemView(e: MenuEntry): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        col.addView(
+            TextView(this).apply {
+                text = e.icon
+                textSize = 18f
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(if (e.active) HexTheme.accentDim else HexTheme.panelBg)
+                    setStroke(if (e.active) 3 else 2, HexTheme.accent)
+                }
+            },
+            LinearLayout.LayoutParams(dp(40), dp(40))
+        )
+        col.addView(
+            TextView(this).apply {
+                text = e.label
+                textSize = 9f
+                typeface = Typeface.MONOSPACE
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                setShadowLayer(4f, 0f, 0f, Color.BLACK)
+                setPadding(0, dp(2), 0, 0)
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        return col
+    }
+
+    private fun menuRadius(): Int {
+        val bubblePx = if (floatingView.width > 0) floatingView.width else bubbleParams.width
+        return maxOf(dp(80), bubblePx / 2 + dp(42))
+    }
+
+    // Hitung ulang posisi tujuan tiap item sesuai posisi bubble sekarang.
+    private fun retargetMenu() {
+        val offs = computeMenuOffsets(
+            menuSlots.size, bubbleCenterX(), bubbleCenterY(), menuRadius()
+        )
+        for ((i, s) in menuSlots.withIndex()) {
+            if (i < offs.size) {
+                s.tx = offs[i][0].toFloat()
+                s.ty = offs[i][1].toFloat()
+            }
+        }
+    }
+
+    private fun applyMenuSlot(s: MenuSlot, scale: Float, alpha: Float) {
+        s.params.x = bubbleCenterX() + s.dx.toInt() - s.params.width / 2
+        s.params.y = bubbleCenterY() + s.dy.toInt() - s.params.height / 2
+        s.view.alpha = alpha
+        s.view.scaleX = scale
+        s.view.scaleY = scale
+        try {
+            windowManager.updateViewLayout(s.view, s.params)
+        } catch (_: Exception) {
+        }
+    }
+
+    // t: 0 = semua item menumpuk di pusat bubble, 1 = di posisi tujuan.
+    private fun animateMenu(
+        from: Float,
+        to: Float,
+        durationMs: Long,
+        interp: android.animation.TimeInterpolator,
+        onEnd: (() -> Unit)? = null
+    ) {
+        menuAnim?.cancel()
+        val a = android.animation.ValueAnimator.ofFloat(from, to)
+        a.duration = durationMs
+        a.interpolator = interp
+        a.addUpdateListener { va ->
+            val t = va.animatedValue as Float
+            for (s in menuSlots) {
+                s.dx = s.tx * t
+                s.dy = s.ty * t
+                applyMenuSlot(s, 0.5f + 0.5f * t, (t * 1.4f).coerceIn(0f, 1f))
+            }
+        }
+        a.addListener(object : android.animation.AnimatorListenerAdapter() {
+            private var cancelled = false
+            override fun onAnimationCancel(animation: android.animation.Animator) {
+                cancelled = true
+            }
+
+            override fun onAnimationEnd(animation: android.animation.Animator) {
+                if (cancelled) return
+                onEnd?.invoke()
+            }
+        })
+        menuAnim = a
+        a.start()
+    }
+
+    private fun showMenu() {
+        if (menuSlots.isNotEmpty()) return
+
+        val entries = listOf(
+            MenuEntry("\uD83E\uDDE9", "Panel", false) { showPanel() },
+            MenuEntry("\uD83D\uDD13", "Decode", overlayActive) { toggleScreenOverlay() },
+            MenuEntry("\uD83C\uDF10", "Bahasa", langOverlayActive) { toggleLanguageOverlay() },
+            MenuEntry("\u2702\uFE0F", "Crop", false) { startCropOcr() },
+            MenuEntry("\uD83C\uDFAF", "Target", false) { openMainActivity(1) },
+            MenuEntry("\uD83D\uDCDC", "Log", false) { openMainActivity(2) },
+            MenuEntry("\u2699\uFE0F", "Atur", false) { openMainActivity(3) },
+            MenuEntry("\u2716\uFE0F", "Tutup", false) { stopSelf() }
         )
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(6), dp(6), dp(6), dp(6))
-            background = GradientDrawable().apply {
-                setColor(HexTheme.panelBg)
-                setStroke(2, HexTheme.accent)
-                cornerRadius = dp(12).toFloat()
-            }
-        }
+        val cx = bubbleCenterX()
+        val cy = bubbleCenterY()
+        val offsets = computeMenuOffsets(entries.size, cx, cy, menuRadius())
 
-        for ((label, action) in items) {
-            root.addView(
-                TextView(this).apply {
-                    text = label
-                    setTextColor(Color.WHITE)
-                    textSize = 14f
-                    typeface = Typeface.MONOSPACE
-                    setPadding(dp(12), dp(11), dp(12), dp(11))
-                    setOnClickListener {
-                        hideMenu()
-                        action()
+        val itemW = dp(52)
+        val itemH = dp(58)
+
+        for ((i, e) in entries.withIndex()) {
+            val v = makeMenuItemView(e)
+            v.alpha = 0f
+            v.scaleX = 0.5f
+            v.scaleY = 0.5f
+            val p = WindowManager.LayoutParams(
+                itemW,
+                itemH,
+                overlayType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = cx - itemW / 2
+                y = cy - itemH / 2
+            }
+
+            v.setOnClickListener {
+                hideMenuAnimated()
+                e.action()
+            }
+            v.setOnTouchListener { _, ev ->
+                when (ev.action) {
+                    MotionEvent.ACTION_DOWN -> itemTouching = true
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> itemTouching = false
+                    MotionEvent.ACTION_OUTSIDE -> {
+                        handler.removeCallbacks(outsideCloseRunnable)
+                        handler.postDelayed(outsideCloseRunnable, 120)
                     }
-                },
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-            )
-        }
-
-        val metrics = resources.displayMetrics
-        val menuW = dp(190)
-        val menuH = dp(44) * items.size + dp(12)
-        val gap = dp(6)
-
-        var menuX = bubbleParams.x
-        if (menuX + menuW > metrics.widthPixels) menuX = metrics.widthPixels - menuW - dp(4)
-        if (menuX < 0) menuX = 0
-
-        var menuY = bubbleParams.y + bubbleParams.height + gap
-        if (menuY + menuH > metrics.heightPixels) {
-            menuY = (bubbleParams.y - menuH - gap).coerceAtLeast(0)
-        }
-
-        val params = WindowManager.LayoutParams(
-            menuW,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            overlayType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            this.x = menuX
-            this.y = menuY
-        }
-
-        // Sentuh di luar menu -> tutup (sentuhan tetap diteruskan ke aplikasi di bawah).
-        root.setOnTouchListener { _, e ->
-            if (e.action == MotionEvent.ACTION_OUTSIDE) {
-                lastOutsideCloseMs = android.os.SystemClock.uptimeMillis()
-                hideMenu()
+                }
+                false
             }
-            false
-        }
 
-        menuView = root
-        try {
-            windowManager.addView(root, params)
-        } catch (e: Exception) {
-            menuView = null
-            Toast.makeText(this, "Menu gagal dibuka: ${e.message}", Toast.LENGTH_LONG).show()
+            try {
+                windowManager.addView(v, p)
+                menuSlots.add(
+                    MenuSlot(v, p, 0f, 0f, offsets[i][0].toFloat(), offsets[i][1].toFloat())
+                )
+            } catch (ex: Exception) {
+                Toast.makeText(this, "Menu gagal dibuka: ${ex.message}", Toast.LENGTH_LONG).show()
+                break
+            }
         }
+        menuView = menuSlots.firstOrNull()?.view
+        animateMenu(0f, 1f, 220, android.view.animation.OvershootInterpolator(0.9f))
+    }
+
+    // Dipanggil tiap bubble bergerak: susunan dihitung ulang agar tetap di dalam layar,
+    // item mengejar posisi tujuan dengan easing supaya tidak melompat.
+    private fun updateMenuPosition() {
+        if (menuSlots.isEmpty() || menuClosing) return
+        menuAnim?.cancel()
+        retargetMenu()
+        for (s in menuSlots) {
+            s.dx += (s.tx - s.dx) * 0.3f
+            s.dy += (s.ty - s.dy) * 0.3f
+            applyMenuSlot(s, 1f, 1f)
+        }
+    }
+
+    // Setelah bubble dilepas: item meluncur halus ke posisi akhir.
+    private fun settleMenu() {
+        if (menuSlots.isEmpty() || menuClosing) return
+        retargetMenu()
+        menuAnim?.cancel()
+        val sx = menuSlots.map { it.dx }
+        val sy = menuSlots.map { it.dy }
+        val a = android.animation.ValueAnimator.ofFloat(0f, 1f)
+        a.duration = 160
+        a.interpolator = android.view.animation.DecelerateInterpolator()
+        a.addUpdateListener { va ->
+            val t = va.animatedValue as Float
+            for ((i, s) in menuSlots.withIndex()) {
+                s.dx = sx[i] + (s.tx - sx[i]) * t
+                s.dy = sy[i] + (s.ty - sy[i]) * t
+                applyMenuSlot(s, 1f, 1f)
+            }
+        }
+        menuAnim = a
+        a.start()
+    }
+
+    private fun hideMenuAnimated() {
+        if (menuSlots.isEmpty()) {
+            hideMenu()
+            return
+        }
+        if (menuClosing) return
+        menuClosing = true
+        handler.removeCallbacks(outsideCloseRunnable)
+        for (s in menuSlots) {
+            s.tx = s.dx
+            s.ty = s.dy
+        }
+        animateMenu(1f, 0f, 140, android.view.animation.AccelerateInterpolator()) { hideMenu() }
     }
 
     private fun hideMenu() {
-        val view = menuView ?: return
-        try {
-            windowManager.removeView(view)
-        } catch (_: Exception) {
-            // Menu mungkin sudah dilepas oleh sistem.
+        handler.removeCallbacks(outsideCloseRunnable)
+        menuAnim?.cancel()
+        menuAnim = null
+        for (s in menuSlots) {
+            try {
+                windowManager.removeView(s.view)
+            } catch (_: Exception) {
+                // Item mungkin sudah dilepas oleh sistem.
+            }
         }
+        menuSlots.clear()
         menuView = null
+        menuClosing = false
+        itemTouching = false
+    }
+
+    private fun startCropOcr() {
+        floatingView.visibility = View.INVISIBLE
+        // Pengaman terakhir: bubble tidak boleh tersembunyi selamanya.
+        handler.postDelayed({
+            if (::floatingView.isInitialized) floatingView.visibility = View.VISIBLE
+        }, 20000)
+        handler.postDelayed({
+            try {
+                ScreenCropOcr.capture(this, windowManager, overlayType) {
+                    floatingView.visibility = View.VISIBLE
+                }
+            } catch (e: Throwable) {
+                // Bubble jangan sampai hilang kalau crop gagal.
+                Log.e(TAG, "Crop gagal", e)
+                floatingView.visibility = View.VISIBLE
+                Toast.makeText(this, "Crop gagal: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }, 300)
     }
 
     // Target, Log, dan Pengaturan sementara membuka layar utama aplikasi.
-    private fun openMainActivity() {
+    private fun openMainActivity(tab: Int = 0) {
         try {
             val intent = Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(MainActivity.EXTRA_TAB, tab)
             }
             startActivity(intent)
         } catch (e: Exception) {
@@ -969,6 +1294,7 @@ class FloatingWidgetService : Service() {
     }
 
     override fun onDestroy() {
+        running = false
         stopLanguageOverlay(false) // LANG_FIX_V1
         stopOverlay(false)
         handler.removeCallbacksAndMessages(null)

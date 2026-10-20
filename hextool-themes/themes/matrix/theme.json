@@ -1,0 +1,23 @@
+{
+  "id": "matrix",
+  "name": "Matrix",
+  "version": 1,
+  "colors": {
+    "bg": "#020A03",
+    "panelBg": "#06130A",
+    "panelBgAlt": "#081A0D",
+    "surface": "#0C2412",
+    "accent": "#00E676",
+    "accentSoft": "#69F0AE",
+    "accentDim": "#0B5A2E",
+    "accentGlow": "#053317",
+    "textPrimary": "#E8FFF0",
+    "textSecondary": "#8FC9A3",
+    "textMuted": "#4F7F61"
+  },
+  "images": {
+    "background": "bg.jpg",
+    "mascot": "mascot.png",
+    "splash": "splash.png"
+  }
+}
