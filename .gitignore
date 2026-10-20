@@ -1,1 +1,5 @@
-"HEXTOOL.zip" 
+local.properties
+.gradle/
+.idea/
+*.bak*
+build-error.txt

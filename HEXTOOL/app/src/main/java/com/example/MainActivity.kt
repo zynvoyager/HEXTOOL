@@ -160,6 +160,89 @@ class MainActivity : AppCompatActivity() {
     //  HOME / DASHBOARD
     // =========================================================
 
+    // THEME_ICON_V1: dialog pilih / unduh / hapus tema
+    private fun showThemePicker() {
+        Toast.makeText(this, "Memuat daftar tema...", Toast.LENGTH_SHORT).show()
+        Thread {
+            val online = try { ThemeManager.fetchIndex() } catch (e: Exception) { null }
+            runOnUiThread { if (!isFinishing) renderThemeDialog(online) }
+        }.start()
+    }
+
+    private fun renderThemeDialog(online: List<ThemeManager.Entry>?) {
+        val installed = ThemeManager.installed(this)
+        // Triple: id, nama, aksi
+        val rows = mutableListOf(
+            Triple(HexTheme.THEME_MONO, "Hitam Putih (Default)", "Pakai"),
+            Triple(HexTheme.THEME_BIRU_LAUT, "Biru Laut", "Pakai")
+        )
+        (online ?: installed).forEach { e ->
+            val local = ThemeManager.installedVersion(this, e.id)
+            val action = when { local < 0 -> "Unduh"; local < e.version -> "Update"; else -> "Pakai" }
+            rows.add(Triple(e.id, e.name, action))
+        }
+        if (online != null) {
+            installed.filter { i -> online.none { it.id == i.id } }
+                .forEach { rows.add(Triple(it.id, it.name, "Pakai")) }
+        } else {
+            Toast.makeText(this, "Offline, hanya tema terpasang", Toast.LENGTH_SHORT).show()
+        }
+
+        val current = HexSettings.getThemeId(this)
+        val labels = rows.map { (id, name, action) ->
+            (if (id == current) "\u25CF " else "\u25CB ") + name + if (action != "Pakai") "  [$action]" else ""
+        }.toTypedArray()
+
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Pilih Tema  (tahan untuk hapus)")
+            .setItems(labels) { _, which ->
+                val (id, _, action) = rows[which]
+                if (action == "Pakai") {
+                    HexSettings.setThemeId(this, id)
+                    recreate()
+                } else {
+                    Toast.makeText(this, "Mengunduh...", Toast.LENGTH_SHORT).show()
+                    Thread {
+                        val err = ThemeManager.download(this, id)
+                        runOnUiThread {
+                            if (err == null) {
+                                HexSettings.setThemeId(this, id)
+                                recreate()
+                            } else {
+                                Toast.makeText(this, err, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }.start()
+                }
+            }
+            .show()
+
+        dlg.listView.setOnItemLongClickListener { _, _, pos, _ ->
+            val (id, name, _) = rows[pos]
+            if (ThemeManager.installedVersion(this, id) < 0) {
+                Toast.makeText(this, "Tema bawaan/belum diunduh tidak bisa dihapus", Toast.LENGTH_SHORT).show()
+            } else {
+                AlertDialog.Builder(this)
+                    .setTitle("Hapus tema?")
+                    .setMessage("\"$name\" akan dihapus dari perangkat.")
+                    .setPositiveButton("Hapus") { _, _ ->
+                        ThemeManager.delete(this, id)
+                        dlg.dismiss()
+                        if (HexSettings.getThemeId(this) == id) {
+                            HexSettings.setThemeId(this, HexTheme.THEME_MONO)
+                            recreate()
+                        } else {
+                            renderThemeDialog(online)
+                        }
+                        Toast.makeText(this, "Tema dihapus", Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton("Batal", null)
+                    .show()
+            }
+            true
+        }
+    }
+
     private fun buildHomeTab(): View {
         val scroll = ScrollView(this)
         val col = LinearLayout(this).apply {
@@ -196,6 +279,14 @@ class MainActivity : AppCompatActivity() {
             textSize = 12f
         })
         header.addView(titleCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        // THEME_ICON_V1: tombol pemilih tema di header Home
+        header.addView(TextView(this).apply {
+            text = "\uD83C\uDFA8"
+            textSize = 18f
+            gravity = Gravity.CENTER
+            background = rounded(HexTheme.surface, 12f, HexTheme.accentDim, 1)
+            setOnClickListener { showThemePicker() }
+        }, LinearLayout.LayoutParams(dp(40), dp(40)))
         col.addView(header)
 
         // Status grid (2x2 + 1)
