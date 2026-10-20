@@ -163,7 +163,12 @@ class FloatingWidgetService : Service() {
         // BUBBLE_ICON_CHECK
         val iconView = floatingView.findViewById<android.widget.ImageView>(R.id.bubbleIcon)
         // THEME_PLUGIN_V2: ikon + latar bubble ikut tema
-        iconView?.let { HexTheme.setImage(it, "mascot", R.drawable.cat_hex) }
+        // ICON_PLUGIN_V1: icons.bubble > images.mascot > bawaan
+        iconView?.let {
+            val bubbleIcon = HexTheme.iconBitmap("bubble")
+            if (bubbleIcon != null) it.setImageBitmap(bubbleIcon)
+            else HexTheme.setImage(it, "mascot", R.drawable.cat_hex)
+        }
         floatingView.findViewById<android.view.View>(R.id.bubbleCircle)?.background =
             android.graphics.drawable.GradientDrawable().apply {
                 shape = android.graphics.drawable.GradientDrawable.OVAL
@@ -1013,19 +1018,35 @@ class FloatingWidgetService : Service() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
         }
-        col.addView(
-            TextView(this).apply {
-                text = e.icon
-                textSize = 18f
-                gravity = Gravity.CENTER
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(if (e.active) HexTheme.accentDim else HexTheme.panelBg)
-                    setStroke(if (e.active) 3 else 2, HexTheme.accent)
-                }
-            },
-            LinearLayout.LayoutParams(dp(40), dp(40))
-        )
+        // ICON_PLUGIN_V1: pakai ikon gambar dari tema (kunci = label huruf kecil) kalau ada,
+        // kalau tidak jatuh ke emoji.
+        val themed = HexTheme.iconBitmap(e.label.lowercase())
+        val circleBg = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(if (e.active) HexTheme.accentDim else HexTheme.panelBg)
+            setStroke(if (e.active) 3 else 2, HexTheme.accent)
+        }
+        if (themed != null) {
+            col.addView(
+                android.widget.ImageView(this).apply {
+                    setImageBitmap(themed)
+                    scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                    setPadding(dp(6), dp(6), dp(6), dp(6))
+                    background = circleBg
+                },
+                LinearLayout.LayoutParams(dp(40), dp(40))
+            )
+        } else {
+            col.addView(
+                TextView(this).apply {
+                    text = e.icon
+                    textSize = 18f
+                    gravity = Gravity.CENTER
+                    background = circleBg
+                },
+                LinearLayout.LayoutParams(dp(40), dp(40))
+            )
+        }
         col.addView(
             TextView(this).apply {
                 text = e.label

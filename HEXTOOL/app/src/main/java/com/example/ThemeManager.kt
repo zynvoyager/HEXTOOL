@@ -18,6 +18,8 @@ object ThemeManager {
     private const val HOST = "raw.githubusercontent.com"
     private const val MAX_JSON = 64 * 1024
     private const val MAX_IMG = 2 * 1024 * 1024
+    private const val MAX_ICON = 512 * 1024      // ICON_PLUGIN_V1: ikon kecil, maks 512 KB
+    private const val MAX_ICON_DIM = 1024        // dan maks 1024 px per sisi
     private val ID_RE = Regex("^[a-z0-9_-]{1,32}$")
     private val FILE_RE = Regex("^[A-Za-z0-9_-]{1,40}\\.(png|jpg|jpeg|webp)$")
     private val COLOR_RE = Regex("^#[0-9A-Fa-f]{6}$")
@@ -28,6 +30,13 @@ object ThemeManager {
         "textPrimary", "textSecondary", "textMuted"
     )
     val IMAGE_KEYS = listOf("background", "mascot", "splash")
+
+    /** ICON_PLUGIN_V1: kunci ikon opsional di theme.json -> "icons".
+     *  bubble = ikon bubble utama; sisanya = ikon item menu melingkar. */
+    val ICON_KEYS = listOf(
+        "bubble",
+        "panel", "decode", "bahasa", "crop", "target", "log", "atur", "tutup"
+    )
 
     data class Entry(val id: String, val name: String, val version: Int)
 
@@ -93,6 +102,23 @@ object ThemeManager {
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
                     if (o.outWidth <= 0 || o.outHeight <= 0) return "Gambar '$f' rusak"
                     File(tmp, f).writeBytes(bytes)
+                }
+            }
+            // ICON_PLUGIN_V1: ikon opsional. Ikon yang gagal diunduh/rusak dilewati
+            // (tidak membatalkan tema) dan app jatuh ke emoji/ikon bawaan.
+            val icons = json.optJSONObject("icons")
+            if (icons != null) {
+                for (k in ICON_KEYS) {
+                    val f = icons.optString(k, "")
+                    if (f.isEmpty() || !FILE_RE.matches(f)) continue
+                    try {
+                        val bytes = httpGet(base + f, MAX_ICON)
+                        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+                        if (o.outWidth <= 0 || o.outHeight <= 0) continue
+                        if (o.outWidth > MAX_ICON_DIM || o.outHeight > MAX_ICON_DIM) continue
+                        File(tmp, f).writeBytes(bytes)
+                    } catch (_: Exception) { }
                 }
             }
             File(tmp, "theme.json").writeBytes(jsonBytes)

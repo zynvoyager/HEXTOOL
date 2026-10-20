@@ -1,6 +1,7 @@
 package com.example.hextool
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.widget.ImageView
@@ -53,8 +54,33 @@ object HexTheme {
     // THEME_PLUGIN_V1: gambar dari tema unduhan (kosong = pakai bawaan APK)
     private val pluginImages = HashMap<String, File>()
 
+    // ICON_PLUGIN_V1: ikon dari tema unduhan (bubble + item menu), di-cache sebagai Bitmap
+    private val pluginIcons = HashMap<String, File>()
+    private val iconCache = HashMap<String, Bitmap?>()
+
+    /** key: "bubble" | "panel" | "decode" | "bahasa" | "crop" | "target" | "log" | "atur" | "tutup".
+     *  Return null kalau tema tidak punya ikon itu (pemanggil pakai emoji/ikon bawaan). */
+    fun iconBitmap(key: String): Bitmap? {
+        if (iconCache.containsKey(key)) return iconCache[key]
+        val f = pluginIcons[key]
+        var bmp: Bitmap? = null
+        if (f != null && f.exists()) {
+            try {
+                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(f.path, o)
+                var sample = 1
+                while (o.outWidth / sample > 256 || o.outHeight / sample > 256) sample *= 2
+                bmp = BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = sample })
+            } catch (_: Throwable) { }
+        }
+        iconCache[key] = bmp
+        return bmp
+    }
+
     fun load(context: Context) {
         pluginImages.clear()
+        pluginIcons.clear()
+        iconCache.clear()
         val id = HexSettings.getThemeId(context)
         when (id) {
             THEME_BIRU_LAUT -> applyBiruLaut()
@@ -98,6 +124,12 @@ object HexTheme {
                 for (k in ThemeManager.IMAGE_KEYS) {
                     val name = im.optString(k, "")
                     if (name.isNotEmpty()) pluginImages[k] = File(ThemeManager.themeDir(context, id), name)
+                }
+            }
+            json.optJSONObject("icons")?.let { ic ->
+                for (k in ThemeManager.ICON_KEYS) {
+                    val name = ic.optString(k, "")
+                    if (name.isNotEmpty()) pluginIcons[k] = File(ThemeManager.themeDir(context, id), name)
                 }
             }
             true
